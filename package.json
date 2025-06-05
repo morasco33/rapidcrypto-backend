@@ -15,6 +15,7 @@
     "express": "4.19.2"
   },
   "overrides": {
-    "debug": "^4.3.4"
+    "debug": "^4.3.4",
+    "iconv-lite": "^0.6.3"
   }
 }

@@ -12,7 +12,9 @@ const PORT = process.env.PORT || 3001;
 const allowedOrigins = [
     'http://localhost:5500', // For local frontend testing (if you use Live Server on this port)
     'http://127.0.0.1:5500', // Another local testing
-    'https://famous-scone-fcd9cb.netlify.app'
+    'https://famous-scone-fcd9cb.netlify.app',
+    'https://rapidcrypto.org', 
+    'https://www.rapidcrypto.org'
     // We will add your Netlify URL and custom domain here later
 ];
 

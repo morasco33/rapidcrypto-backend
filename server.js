@@ -61,6 +61,8 @@ app.use(helmet()); // Sensible defaults. Adjust if specific CSP is needed.
 // --- CORS Configuration (YOUR PREFERRED SETUP) ---
 const allowedOrigins = [
 // Another local testing
+    'http://localhost:5500', // For local frontend testing (if you use Live Server on this port)
+    'http://127.0.0.1:5500',
     'https://famous-scone-fcd9cb.netlify.app',
     'https://rapidcrypto.org',
     'https://www.rapidcrypto.org',

@@ -40,7 +40,7 @@ const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD;
 
 // This URL will be used for constructing links in emails.
 // Set FRONTEND_PRIMARY_URL=https://rapidcrypto.org in Render's Environment Variables
-const FRONTEND_URL_FOR_EMAILS = process.env.FRONTEND_PRIMARY_URL || `http://localhost:5500`;
+const FRONTEND_URL_FOR_EMAILS = process.env.FRONTEND_PRIMARY_URL || `https://famous-scone-fcd9cb.netlify.app`;
 
 // --- Critical Environment Variable Checks ---
 if (!JWT_SECRET) { console.error('FATAL ERROR: JWT_SECRET not defined.'); process.exit(1); }
@@ -60,8 +60,7 @@ app.use(helmet()); // Sensible defaults. Adjust if specific CSP is needed.
 
 // --- CORS Configuration (YOUR PREFERRED SETUP) ---
 const allowedOrigins = [
-    'http://localhost:5500', // For local frontend testing (if you use Live Server on this port)
-    'http://127.0.0.1:5500', // Another local testing
+// Another local testing
     'https://famous-scone-fcd9cb.netlify.app',
     'https://rapidcrypto.org',
     'https://www.rapidcrypto.org',

@@ -54,6 +54,7 @@ if (NODE_ENV === 'production' && !process.env.NETLIFY_DEPLOY_URL) {
     console.warn('⚠️ WARNING: NETLIFY_DEPLOY_URL is not set in environment. This is needed for CORS.');
 }
 
+app.set('trust proxy', 1);
 
 // --- Helmet Security Headers ---
 app.use(helmet()); // Sensible defaults. Adjust if specific CSP is needed.

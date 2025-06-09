@@ -138,10 +138,12 @@ const generalApiLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standa
 app.use('/api', generalApiLimiter);
 const authActionLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10, message: { success: false, message: 'Too many auth attempts.' }, skipSuccessfulRequests: true });
 
-const INVESTMENT_PLANS = { "silver":   { id: "silver",   name: "Silver Plan", minAmount: 1500,  maxAmount: 10000,  profitRatePercent: 2,  interestPeriodHours: 48, maturityPeriodDays: 2, withdrawalLockDays: 2 },
-    "gold":     { id: "gold",     name: "Gold Plan",   minAmount: 2500,  maxAmount: 25000,  profitRatePercent: 5,  interestPeriodHours: 24, maturityPeriodDays: 2, withdrawalLockDays: 2 },
-    "premium":  { id: "premium",  name: "Premium Plan",minAmount: 5000,  maxAmount: 50000,  profitRatePercent: 10, interestPeriodHours: 48, maturityPeriodDays: 2, withdrawalLockDays: 2 },
-    "platinum": { id: "platinum", name: "Platinum Plan",minAmount: 10000, maxAmount: 100000, profitRatePercent: 20, interestPeriodHours: 12, maturityPeriodDays: 2, withdrawalLockDays: 2 }};
+const INVESTMENT_PLANS = {
+    "silver":   { id: "silver",   name: "Silver Plan", minAmount: 1500,  maxAmount: 10000,  profitRatePercent: 2,  interestPeriodHours: 48, maturityPeriodDays: 14, withdrawalLockDays: 14 },
+    "gold":     { id: "gold",     name: "Gold Plan",   minAmount: 2500,  maxAmount: 25000,  profitRatePercent: 5,  interestPeriodHours: 24, maturityPeriodDays: 14, withdrawalLockDays: 14 },
+    "premium":  { id: "premium",  name: "Premium Plan",minAmount: 5000,  maxAmount: 50000,  profitRatePercent: 10, interestPeriodHours: 48, maturityPeriodDays: 14, withdrawalLockDays: 14 },
+    "platinum": { id: "platinum", name: "Platinum Plan",minAmount: 10000, maxAmount: 100000, profitRatePercent: 20, interestPeriodHours: 12, maturityPeriodDays: 14, withdrawalLockDays: 14 }
+};
 function getPlanDurationsInMs(plan) { if (!plan || typeof plan.interestPeriodHours !== 'number' || typeof plan.maturityPeriodDays !== 'number' || typeof plan.withdrawalLockDays !== 'number') {
         console.error("ERROR [getPlanDurationsInMs]: Invalid plan config:", plan); throw new Error("Plan config issue.");
     } return { interestPeriodMs: plan.interestPeriodHours*3600000, maturityPeriodMs: plan.maturityPeriodDays*86400000, withdrawalLockPeriodMs: plan.withdrawalLockDays*86400000 };}
@@ -199,7 +201,6 @@ app.get('/api/investment-plans', authenticate, (req, res) => {
     else { console.error("ERROR [server.js]: No plans defined for /api/investment-plans."); res.status(500).json({success:false,message:"Plans unavailable."});}
 });
 
-// GET all investments for the logged-in user
 app.get('/api/investments', authenticate, async (req, res, next) => {
     try {
         const investments = await Investment.find({ userId: req.user._id }).sort({ startDate: -1 });
@@ -250,7 +251,7 @@ app.post('/api/investments', authenticate, [
         planId: plan.id,
         planName: plan.name,
         initialAmount: amount,
-        currentValue: amount, // Initial current value is the invested amount
+        currentValue: amount,
         profitRate: plan.profitRatePercent,
         interestPeriodMs: durations.interestPeriodMs,
         lastInterestAccrualTime: now,
@@ -263,7 +264,7 @@ app.post('/api/investments', authenticate, [
       const trx = new Transaction({
         userId,
         type: 'plan_investment',
-        amount: -amount, // Negative for user's perspective (deduction)
+        amount: -amount,
         description: `Invested $${amount.toFixed(2)} in ${plan.name}.`,
         relatedInvestmentId: inv._id,
         meta: { ip: req.ip }
@@ -279,12 +280,11 @@ app.post('/api/investments', authenticate, [
         success: true,
         message: `Successfully invested $${amount.toFixed(2)} in ${plan.name}.`,
         newBalance: user.balance,
-        investment: inv // Send back the created investment object
+        investment: inv
       });
     } catch (e) {
       await session.abortTransaction();
       console.error(`❌ ERROR [POST /api/investments]:`, e);
-      // More specific error messages for frontend
       if (e.message.includes("Insufficient balance") || e.message.includes("Invalid plan") || e.message.includes("Investment amount must be")) {
           return res.status(400).json({ success: false, message: e.message });
       }
@@ -294,7 +294,6 @@ app.post('/api/investments', authenticate, [
     }
   });
 
-// Withdraw from an investment
 app.post('/api/investments/:investmentId/withdraw', authenticate, [
     param('investmentId').isMongoId(),
     body('withdrawalPin').isNumeric().isLength({ min: 5, max: 5 })
@@ -338,18 +337,16 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
         if (now < investment.withdrawalUnlockTime) {
             throw new Error(`Investment not yet unlocked for withdrawal. Unlock date: ${investment.withdrawalUnlockTime.toLocaleDateString()}.`);
         }
-
-        // For simplicity, we assume currentValue is updated by a separate batch job.
-        // If not, you'd calculate final profit here before adding to balance.
+        
         const amountToReturn = investment.currentValue;
 
         user.balance += amountToReturn;
-        investment.status = 'withdrawn_matured'; // Or 'withdrawn_early' if logic supported it
+        investment.status = 'withdrawn_matured';
 
         const trx = new Transaction({
             userId,
             type: 'plan_withdrawal_return',
-            amount: amountToReturn, // Positive for user's perspective (credit)
+            amount: amountToReturn,
             description: `Withdrawal of $${amountToReturn.toFixed(2)} from ${investment.planName} (ID: ${investment._id}).`,
             relatedInvestmentId: investment._id,
             meta: { ip: req.ip }
@@ -371,7 +368,6 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
     } catch (e) {
         await session.abortTransaction();
         console.error(`❌ ERROR [POST /api/investments/:investmentId/withdraw]:`, e);
-        // Send specific, user-friendly messages for common errors
         if (['User not found', 'Withdrawal PIN not set', 'Incorrect withdrawal PIN', 'Investment not found', 'Investment is not active', 'Investment not yet unlocked'].some(knownMsg => e.message.includes(knownMsg))) {
             return res.status(400).json({ success: false, message: e.message });
         }

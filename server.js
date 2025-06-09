@@ -28,6 +28,9 @@ app.use(helmet());
 const allowedOrigins = [
   'http://localhost:5500',
   'https://famous-scone-fcd9cb.netlify.app',
+  'https://famous-scone-fcd9cb.netlify.app',
+  'https://rapidcrypto.org',
+  'https://www.rapidcrypto.org',
   process.env.FRONTEND_PRIMARY_URL,
   process.env.FRONTEND_WWW_URL
 ].filter(Boolean);

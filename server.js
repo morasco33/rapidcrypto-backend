@@ -266,12 +266,12 @@ const authActionLimiter = rateLimit({
     skipSuccessfulRequests: true 
 });
 
-// --- ✨ MODIFIED Investment Plan Definitions (14-Day Maturity) ---
+// --- ✨ MODIFIED Investment Plan Definitions (Now all 24 hours) ---
 const INVESTMENT_PLANS = {
-    "silver":   { id: "silver",   name: "Silver Plan",   minAmount: 1500,  maxAmount: 10000,  profitRatePercent: 2,  interestPeriodHours: 48, maturityPeriodDays: 14, withdrawalLockDays: 14 },
+    "silver":   { id: "silver",   name: "Silver Plan",   minAmount: 1500,  maxAmount: 10000,  profitRatePercent: 2,  interestPeriodHours: 24, maturityPeriodDays: 14, withdrawalLockDays: 14 },
     "gold":     { id: "gold",     name: "Gold Plan",     minAmount: 2500,  maxAmount: 25000,  profitRatePercent: 5,  interestPeriodHours: 24, maturityPeriodDays: 14, withdrawalLockDays: 14 },
-    "premium":  { id: "premium",  name: "Premium Plan",  minAmount: 5000,  maxAmount: 50000,  profitRatePercent: 10, interestPeriodHours: 48, maturityPeriodDays: 14, withdrawalLockDays: 14 },
-    "platinum": { id: "platinum", name: "Platinum Plan", minAmount: 10000, maxAmount: 100000, profitRatePercent: 20, interestPeriodHours: 12, maturityPeriodDays: 14, withdrawalLockDays: 14 }
+    "premium":  { id: "premium",  name: "Premium Plan",  minAmount: 5000,  maxAmount: 50000,  profitRatePercent: 10, interestPeriodHours: 24, maturityPeriodDays: 14, withdrawalLockDays: 14 },
+    "platinum": { id: "platinum", name: "Platinum Plan", minAmount: 10000, maxAmount: 100000, profitRatePercent: 20, interestPeriodHours: 24, maturityPeriodDays: 14, withdrawalLockDays: 14 }
 };
 
 function getPlanDurationsInMs(plan) {
@@ -691,7 +691,6 @@ app.get('/api/transactions', authenticate, async (req, res, next) => {
 });
 
 // --- ADMIN ROUTES ---
-// ... (Admin routes are unchanged and correct) ...
 app.get('/api/admin/pending-users', adminAuthenticate, async (req, res, next) => {
     try {
         const pendingUsers = await User.find({ verified: true, adminApproved: false })
@@ -796,6 +795,7 @@ app.post('/api/admin/resend-verification/:userId', adminAuthenticate, [
         res.status(200).json({ success: true, message: 'Verification email has been resent to the user.' });
     } catch (e) { console.error("Error in /api/admin/resend-verification: ", e); next(e); }
 });
+
 
 // --- Catch-all & Error Handling ---
 app.all('/api/*', (req, res) => {

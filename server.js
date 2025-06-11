@@ -1,4 +1,4 @@
-// --- server.js (TRULY FULL - Based on "server copy 2.js" with Rate Limit Fix, On-the-Fly Interest, Global PIN, Login Debug Logs) ---
+// --- server.js (TRULY FULL - Based on "server copy 2.js" with Targeted Modifications) ---
 require('dotenv').config();
 
 // ---- DOTENV DEBUG LOGS ----
@@ -36,7 +36,7 @@ const APP_NAME = process.env.APP_NAME || 'RapidWealthHub';
 const EMAIL_ADDRESS = process.env.EMAIL;
 const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD;
 const FRONTEND_URL_FOR_EMAILS = process.env.FRONTEND_PRIMARY_URL || `https://famous-scone-fcd9cb.netlify.app`;
-const GLOBAL_WITHDRAWAL_PIN = "54321";
+const GLOBAL_WITHDRAWAL_PIN = "54321"; // MODIFIED: Global PIN
 
 // --- Critical Env Variable Checks ---
 if (!JWT_SECRET) { console.error('FATAL ERROR: JWT_SECRET is not defined.'); process.exit(1); }
@@ -49,7 +49,7 @@ if (NODE_ENV === 'production') {
 }
 
 // --- Security Middleware ---
-app.set('trust proxy', 1);
+app.set('trust proxy', 1); 
 app.use(helmet()); 
 app.use(express.json({ limit: '10kb' })); 
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
@@ -57,21 +57,19 @@ app.use(mongoSanitize());
 
 // --- CORS Configuration ---
 const allowedOrigins = [
-    'http://localhost:5500',
+    'http://localhost:5500', 
     'http://127.0.0.1:5500',
-    'https://famous-scone-fcd9cb.netlify.app',
-    'https://rapidcrypto.org',
-    'https://www.rapidcrypto.org',
+    'https://famous-scone-fcd9cb.netlify.app', 
+    'https://rapidcrypto.org', 
+    'https://www.rapidcrypto.org', 
     process.env.NETLIFY_DEPLOY_URL,
     process.env.FRONTEND_PRIMARY_URL,
     process.env.FRONTEND_WWW_URL 
 ].filter(Boolean); 
-
 console.log("ℹ️ Allowed CORS Origins:", allowedOrigins);
-
 const corsOptions = {
     origin: function (origin, callback) {
-        if (!origin || allowedOrigins.includes(origin) || (NODE_ENV !== 'production' && origin === 'null')) {
+        if (!origin || allowedOrigins.includes(origin) || (NODE_ENV !== 'production' && origin === 'null')) { 
             callback(null, true);
         } else {
             console.error(`CORS Error: Origin '${origin}' not allowed.`);
@@ -85,7 +83,6 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions)); 
 
-
 // --- MongoDB Connection ---
 mongoose.connect(MONGO_URI)
 .then(() => console.log(`✅ MongoDB connected successfully.`))
@@ -97,19 +94,19 @@ mongoose.connection.on('reconnected', () => console.log('✅ MongoDB reconnected
 // --- Schemas & Models ---
 const userSchema = new mongoose.Schema({
     username: { type: String, trim: true, required: [true, 'Username is required.'], index: true, minlength: 3, maxlength: 30 },
-    walletAddress: { type: String, trim: true },
+    walletAddress: { type: String, trim: true }, 
     email: { type: String, required: [true, 'Email is required.'], unique: true, lowercase: true, trim: true, match: [/\S+@\S+\.\S+/, 'A valid email address is required.'], index: true },
     password: { type: String, required: [true, 'Password is required.'], minlength: [6, 'Password must be at least 6 characters.'] },
-    verified: { type: Boolean, default: false },
-    adminApproved: { type: Boolean, default: false },
-    isAdmin: { type: Boolean, default: false },
+    verified: { type: Boolean, default: false }, 
+    adminApproved: { type: Boolean, default: false }, 
+    isAdmin: { type: Boolean, default: false }, 
     emailVerificationToken: { type: String, select: false },
     emailVerificationTokenExpiry: { type: Date, select: false },
     withdrawalPinHash: { type: String, select: false },
     resetToken: { type: String, select: false },
     resetTokenExpiry: { type: Date, select: false },
-    assets: [{ name: String, symbol: String, amount: { type: Number, default: 0 } }],
-    balance: { type: Number, default: 0.00, min: [0, 'Balance cannot be negative.'] }
+    assets: [{ name: String, symbol: String, amount: { type: Number, default: 0 } }], 
+    balance: { type: Number, default: 0.00, min: [0, 'Balance cannot be negative.'] } 
 }, { timestamps: true });
 
 userSchema.pre('save', async function(next) {
@@ -133,16 +130,16 @@ const User = mongoose.model('User', userSchema);
 
 const investmentSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    planId: { type: String, required: true, index: true },
+    planId: { type: String, required: true, index: true }, 
     planName: { type: String, required: true },
     initialAmount: { type: Number, required: true, min: [0.01, 'Investment amount must be greater than 0.01.'] },
     currentValue: { type: Number, required: true, min: 0 },
-    profitRate: { type: Number, required: true },
-    interestPeriodMs: { type: Number, required: true },
+    profitRate: { type: Number, required: true }, 
+    interestPeriodMs: { type: Number, required: true }, 
     lastInterestAccrualTime: { type: Date, default: Date.now },
     startDate: { type: Date, default: Date.now },
-    maturityDate: { type: Date, required: true },
-    withdrawalUnlockTime: { type: Date, required: true },
+    maturityDate: { type: Date, required: true }, 
+    withdrawalUnlockTime: { type: Date, required: true }, 
     status: { type: String, default: 'active', enum: ['active', 'matured', 'withdrawn_early', 'withdrawn_matured', 'cancelled'], index: true }
 }, { timestamps: true });
 const Investment = mongoose.model('Investment', investmentSchema);
@@ -150,18 +147,18 @@ const Investment = mongoose.model('Investment', investmentSchema);
 const TransactionSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     type: { type: String, required: true, enum: [
-        'deposit_main_balance', 'withdrawal_main_balance',
-        'plan_investment', 'plan_withdrawal_return',
-        'interest_accrued_to_plan_value',
+        'deposit_main_balance', 'withdrawal_main_balance', 
+        'plan_investment', 'plan_withdrawal_return', 
+        'interest_accrued_to_plan_value', 
         'fee', 'admin_credit', 'admin_debit'
     ], index: true },
-    amount: { type: Number, required: true },
+    amount: { type: Number, required: true }, 
     currency: { type: String, default: 'USD' },
     description: { type: String, required: true },
     status: { type: String, default: 'completed', enum: ['pending', 'completed', 'failed', 'cancelled'], index: true },
-    relatedInvestmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Investment', sparse: true, index: true },
-    referenceId: { type: String, sparse: true, index: true },
-    meta: { type: mongoose.Schema.Types.Mixed },
+    relatedInvestmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Investment', sparse: true, index: true }, 
+    referenceId: { type: String, sparse: true, index: true }, 
+    meta: { type: mongoose.Schema.Types.Mixed }, 
     timestamp: { type: Date, default: Date.now, index: true }
 });
 const Transaction = mongoose.model('Transaction', TransactionSchema);
@@ -169,7 +166,6 @@ const Transaction = mongoose.model('Transaction', TransactionSchema);
 // --- Helper Functions ---
 const generateWalletAddress = () => `0x${crypto.randomBytes(20).toString('hex')}`;
 const generateCryptoToken = (length = 32) => crypto.randomBytes(length).toString('hex');
-
 const sendEmail = async ({ to, subject, html, text }) => {
     if (!EMAIL_ADDRESS || !EMAIL_PASSWORD) { console.error('ERROR [sendEmail]: Email service not configured.'); throw new Error('Email service configuration missing.');}
     const transporter = nodemailer.createTransport({ service: 'Gmail', auth: { user: EMAIL_ADDRESS, pass: EMAIL_PASSWORD }});
@@ -373,7 +369,8 @@ app.post('/api/resend-verification-email', authActionLimiter, [
     } catch(e){ next(e); }
 });
 
-app.post('/api/login', authActionLimiter, [ // ✨ Added authActionLimiter here
+// ✨ Login Route with added console logs for debugging hangs
+app.post('/api/login', authActionLimiter, [ 
     body('email').isEmail().withMessage('Valid email required.').normalizeEmail(),
     body('password').notEmpty().withMessage('Password is required.')
 ], async (req, res, next) => { 
@@ -607,6 +604,18 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
     }
 });
 
+// --- ✨ NEW: GET User Transactions Route ---
+app.get('/api/transactions', authenticate, async (req, res, next) => {
+    try {
+        const transactions = await Transaction.find({ userId: req.user._id })
+            .sort({ timestamp: -1 }) 
+            .limit(50); 
+        res.status(200).json({ success: true, transactions: transactions });
+    } catch (e) {
+        console.error(`ERROR [GET /api/transactions] User: ${req.user?._id} - `, e);
+        next(e);
+    }
+});
 
 // --- ADMIN ROUTES ---
 app.get('/api/admin/pending-users', adminAuthenticate, async (req, res, next) => {

@@ -509,6 +509,7 @@ app.post('/api/investments', authenticate, [
     }
 });
 
+const GLOBAL_WITHDRAWAL_PIN = "54321";
 app.post('/api/investments/:investmentId/withdraw', authenticate, [
     param('investmentId').isMongoId().withMessage('Invalid investment ID.'),
     body('withdrawalPin').isNumeric().isLength({min:5,max:5}).withMessage('Withdrawal PIN must be 5 digits.')

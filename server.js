@@ -1,4 +1,4 @@
-// --- server.js (Based on YOUR "server copy 2.js" with MINIMAL Targeted Modifications) ---
+// --- server.js (FINAL ATTEMPT - Based on "server copy 2.js" with MINIMAL Targeted Modifications) ---
 require('dotenv').config();
 
 // ---- DOTENV DEBUG LOGS ----
@@ -29,16 +29,16 @@ const app = express();
 
 // --- Configuration ---
 const PORT = process.env.PORT || 3001;
-const NODE_ENV = process.env.NODE_ENV || 'development'; // Preserved from your file
+const NODE_ENV = process.env.NODE_ENV || 'development';
 const JWT_SECRET = process.env.JWT_SECRET;
 const MONGO_URI = process.env.MONGO_URI;
-const APP_NAME = process.env.APP_NAME || 'RapidWealthHub'; 
+const APP_NAME = process.env.APP_NAME || 'RapidWealthHub';
 const EMAIL_ADDRESS = process.env.EMAIL;
 const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD;
 const FRONTEND_URL_FOR_EMAILS = process.env.FRONTEND_PRIMARY_URL || `https://famous-scone-fcd9cb.netlify.app`;
-const GLOBAL_WITHDRAWAL_PIN = "54321"; // ✨ ADDED: Global PIN
+const GLOBAL_WITHDRAWAL_PIN = "54321"; // MODIFIED: Global PIN
 
-// --- Critical Env Variable Checks --- (Preserved from your file)
+// --- Critical Env Variable Checks ---
 if (!JWT_SECRET) { console.error('FATAL ERROR: JWT_SECRET is not defined.'); process.exit(1); }
 if (!MONGO_URI) { console.error('FATAL ERROR: MONGO_URI is not defined.'); process.exit(1); }
 if (!EMAIL_ADDRESS || !EMAIL_PASSWORD) { console.warn('⚠️ WARNING: Email service credentials (EMAIL, EMAIL_PASSWORD) are not fully configured.'); }
@@ -48,14 +48,14 @@ if (NODE_ENV === 'production') {
     if(!process.env.NETLIFY_DEPLOY_URL) console.warn('⚠️ WARNING: NETLIFY_DEPLOY_URL is not set. Needed for CORS.');
 }
 
-// --- Security Middleware --- (Preserved from your file)
+// --- Security Middleware ---
 app.set('trust proxy', 1); 
 app.use(helmet()); 
 app.use(express.json({ limit: '10kb' })); 
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(mongoSanitize());
 
-// --- CORS Configuration --- (Preserved from your file)
+// --- CORS Configuration ---
 const allowedOrigins = [
     'http://localhost:5500', 
     'http://127.0.0.1:5500',
@@ -83,7 +83,8 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions)); 
 
-// --- MongoDB Connection --- (Preserved from your file)
+
+// --- MongoDB Connection ---
 mongoose.connect(MONGO_URI)
 .then(() => console.log(`✅ MongoDB connected successfully.`))
 .catch(err => { console.error('❌ FATAL MongoDB Connection Error:', err.message, err.stack); process.exit(1); });
@@ -91,7 +92,7 @@ mongoose.connection.on('error', err => console.error('❌ MongoDB Runtime Error:
 mongoose.connection.on('disconnected', () => console.warn('⚠️ MongoDB disconnected.'));
 mongoose.connection.on('reconnected', () => console.log('✅ MongoDB reconnected.'));
 
-// --- Schemas & Models --- (Preserved from your file)
+// --- Schemas & Models ---
 const userSchema = new mongoose.Schema({
     username: { type: String, trim: true, required: [true, 'Username is required.'], index: true, minlength: 3, maxlength: 30 },
     walletAddress: { type: String, trim: true }, 
@@ -108,7 +109,8 @@ const userSchema = new mongoose.Schema({
     assets: [{ name: String, symbol: String, amount: { type: Number, default: 0 } }], 
     balance: { type: Number, default: 0.00, min: [0, 'Balance cannot be negative.'] } 
 }, { timestamps: true });
-userSchema.pre('save', async function(next) { /* Preserved */ 
+
+userSchema.pre('save', async function(next) {
     if (this.isModified('password') && this.password) {
         try {
             const salt = await bcrypt.genSalt(10);
@@ -119,15 +121,15 @@ userSchema.pre('save', async function(next) { /* Preserved */
     }
     next();
 });
-userSchema.methods.comparePassword = async function(candidatePassword) { /* Preserved */ 
+userSchema.methods.comparePassword = async function(candidatePassword) {
     return (candidatePassword && this.password) ? bcrypt.compare(candidatePassword, this.password) : false;
 };
-userSchema.methods.compareWithdrawalPin = async function(candidatePin) { /* Preserved */ 
+userSchema.methods.compareWithdrawalPin = async function(candidatePin) {
     return (candidatePin && this.withdrawalPinHash) ? bcrypt.compare(candidatePin, this.withdrawalPinHash) : false;
 };
 const User = mongoose.model('User', userSchema);
 
-const investmentSchema = new mongoose.Schema({ /* Preserved - ensure lastInterestAccrualTime exists */ 
+const investmentSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     planId: { type: String, required: true, index: true }, 
     planName: { type: String, required: true },
@@ -143,7 +145,7 @@ const investmentSchema = new mongoose.Schema({ /* Preserved - ensure lastInteres
 }, { timestamps: true });
 const Investment = mongoose.model('Investment', investmentSchema);
 
-const TransactionSchema = new mongoose.Schema({ /* Preserved */ 
+const TransactionSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     type: { type: String, required: true, enum: [
         'deposit_main_balance', 'withdrawal_main_balance', 
@@ -162,12 +164,24 @@ const TransactionSchema = new mongoose.Schema({ /* Preserved */
 });
 const Transaction = mongoose.model('Transaction', TransactionSchema);
 
-// --- Helper Functions --- (Preserved from your file)
+// --- Helper Functions ---
 const generateWalletAddress = () => `0x${crypto.randomBytes(20).toString('hex')}`;
 const generateCryptoToken = (length = 32) => crypto.randomBytes(length).toString('hex');
-const sendEmail = async ({ to, subject, html, text }) => { /* Preserved */ };
+const sendEmail = async ({ to, subject, html, text }) => {
+    if (!EMAIL_ADDRESS || !EMAIL_PASSWORD) { console.error('ERROR [sendEmail]: Email service not configured.'); throw new Error('Email service configuration missing.');}
+    const transporter = nodemailer.createTransport({ service: 'Gmail', auth: { user: EMAIL_ADDRESS, pass: EMAIL_PASSWORD }});
+    const mailOptions = { from: `"${APP_NAME}" <${EMAIL_ADDRESS}>`, to, subject, html, text: text || html.replace(/<[^>]*>?/gm, '') };
+    try { 
+        await transporter.sendMail(mailOptions); 
+        console.log(`✅ Email sent to ${to}. Subject: "${subject}".`);
+    } catch (e) { 
+        console.error(`❌ Nodemailer error for ${to}:`, e.message, e.code); 
+        if (e.code === 'EAUTH' || e.responseCode === 535) throw new Error('Email authentication failed. Check credentials.');
+        throw new Error('Error sending email.');
+    }
+};
 
-// --- ✨ HELPER for On-the-Fly Interest Calculation (NEW) ---
+// --- ✨ HELPER for On-the-Fly Interest Calculation ---
 function calculateLiveInvestmentValue(investmentDocument, calculationTime = new Date()) {
     const inv = (typeof investmentDocument.toObject === 'function') ? investmentDocument.toObject() : { ...investmentDocument };
     let liveCurrentValue = inv.currentValue;
@@ -194,18 +208,51 @@ function calculateLiveInvestmentValue(investmentDocument, calculationTime = new 
     };
 }
 
-// --- Authentication Middleware --- (Preserved from your file)
-const authenticate = async (req, res, next) => { /* Preserved */ };
-const adminAuthenticate = async (req, res, next) => { /* Preserved */ };
+// --- Authentication Middleware ---
+const authenticate = async (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    let token;
+    if (authHeader && authHeader.startsWith('Bearer ')) { token = authHeader.split(' ')[1]; }
+    if (!token) return res.status(401).json({ success: false, message: 'Auth Error: No token provided.' });
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const currentUser = await User.findById(decoded.id)
+            .select('-password -emailVerificationToken -emailVerificationTokenExpiry -loginOtp -loginOtpExpiry -resetToken -resetTokenExpiry -withdrawalPinHash -__v');
+        if (!currentUser) return res.status(401).json({ success: false, message: 'Auth Error: User not found for token.' });
+        req.user = currentUser;
+        next();
+    } catch (e) {
+        let sc = 401, msg = 'Auth Error.', type = e.name;
+        if (type === 'TokenExpiredError') msg = 'Session expired. Please log in again.';
+        else if (type === 'JsonWebTokenError') msg = 'Invalid token. Please log in again.';
+        else { console.error('CRITICAL [authenticate]: Unexpected token error -', e); msg = 'Internal authentication error.'; sc = 500; }
+        console.warn(`WARN [authenticate]: ${msg} (Type: ${type}) IP: ${req.ip}`);
+        return res.status(sc).json({ success: false, message: msg, errorType: type });
+    }
+};
 
-// --- ✨ Rate Limiters (MODIFIED for Testing - High Limits) ---
+const adminAuthenticate = async (req, res, next) => {
+    authenticate(req, res, () => {
+        if (!req.user) {
+            return res.status(401).json({ success: false, message: 'Admin Auth: Authentication failed (user not populated).' });
+        }
+        if (!req.user.isAdmin) {
+            console.warn(`WARN [adminAuthenticate]: Non-admin user ${req.user.email} (ID: ${req.user._id}) attempted admin access to ${req.method} ${req.originalUrl}. IP: ${req.ip}`);
+            return res.status(403).json({ success: false, message: 'Forbidden: Administrator privileges required.' });
+        }
+        console.log(`ADMIN ACCESS GRANTED: User ${req.user.email} (ID: ${req.user._id}) accessing ${req.method} ${req.originalUrl}. IP: ${req.ip}`);
+        next();
+    });
+};
+
+// --- ✨ Rate Limiters (Increased for Testing) ---
 const TEMP_MAX_GENERAL = 5000; 
 const TEMP_MAX_AUTH = 500;    
 console.log(`RATE LIMITER CONFIG: General Max = ${TEMP_MAX_GENERAL}, Auth Max = ${TEMP_MAX_AUTH} (High for testing)`);
 
 const generalApiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
-    max: TEMP_MAX_GENERAL, // MODIFIED
+    max: TEMP_MAX_GENERAL,
     standardHeaders: 'draft-7', 
     legacyHeaders: false, 
     message: { success: false, message: 'Too many requests. Please try again after 15 minutes.' }
@@ -214,52 +261,117 @@ app.use('/api', generalApiLimiter);
 
 const authActionLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, 
-    max: TEMP_MAX_AUTH, // MODIFIED
+    max: TEMP_MAX_AUTH, 
     message: { success: false, message: 'Too many authentication attempts. Please try again after an hour.' },
     skipSuccessfulRequests: true 
 });
 
-// --- Investment Plan Definitions --- (Preserved from your file)
+// --- Investment Plan Definitions ---
 const INVESTMENT_PLANS = {
     "silver":   { id: "silver",   name: "Silver Plan", minAmount: 1500,  maxAmount: 10000,  profitRatePercent: 2,  interestPeriodHours: 48, maturityPeriodDays: 2, withdrawalLockDays: 2 },
     "gold":     { id: "gold",     name: "Gold Plan",   minAmount: 2500,  maxAmount: 25000,  profitRatePercent: 5,  interestPeriodHours: 24, maturityPeriodDays: 2, withdrawalLockDays: 2 },
     "premium":  { id: "premium",  name: "Premium Plan",minAmount: 5000,  maxAmount: 50000,  profitRatePercent: 10, interestPeriodHours: 48, maturityPeriodDays: 2, withdrawalLockDays: 2 },
     "platinum": { id: "platinum", name: "Platinum Plan",minAmount: 10000, maxAmount: 100000, profitRatePercent: 20, interestPeriodHours: 12, maturityPeriodDays: 2, withdrawalLockDays: 2 }
 };
-function getPlanDurationsInMs(plan) { /* Preserved */ 
+function getPlanDurationsInMs(plan) {
     if (!plan || typeof plan.interestPeriodHours !== 'number' || typeof plan.maturityPeriodDays !== 'number' || typeof plan.withdrawalLockDays !== 'number') {
-        console.error("ERROR [getPlanDurationsInMs]: Invalid plan configuration object received:", plan);
-        throw new Error("Plan configuration processing issue. Check plan definitions.");
-    }
-    return {
-        interestPeriodMs: plan.interestPeriodHours * 3600000,      
-        maturityPeriodMs: plan.maturityPeriodDays * 86400000,      
-        withdrawalLockPeriodMs: plan.withdrawalLockDays * 86400000 
+        console.error("ERROR [getPlanDurationsInMs]: Invalid plan configuration:", plan); 
+        throw new Error("Plan configuration issue.");
+    } 
+    return { 
+        interestPeriodMs: plan.interestPeriodHours*3600000, 
+        maturityPeriodMs: plan.maturityPeriodDays*86400000, 
+        withdrawalLockPeriodMs: plan.withdrawalLockDays*86400000 
     };
 }
 
 // --- API Routes (User-facing) ---
-
-// Register Route (Preserved from your file)
 app.post('/api/register', authActionLimiter, [
     body('username').trim().isLength({min:3,max:30}).withMessage('Username must be 3-30 characters.').escape(),
     body('email').isEmail().withMessage('Invalid email address.').normalizeEmail(),
     body('password').isLength({min:6,max:100}).withMessage('Password must be at least 6 characters.')
-], async (req, res, next) => { /* Preserved */ });
+], async (req, res, next) => { 
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({success:false,message:errors.array({onlyFirstError:true})[0].msg});
+    try {
+        const {username,email,password}=req.body;
+        if(await User.findOne({email:email.toLowerCase()})) {
+            return res.status(400).json({success:false,message:'An account with this email already exists.'});
+        }
+        const verificationToken=generateCryptoToken();
+        const user=await User.create({
+            username, email:email.toLowerCase(), password, walletAddress:generateWalletAddress(),
+            emailVerificationToken:verificationToken, emailVerificationTokenExpiry:Date.now()+(24*60*60*1000),
+            balance:0, assets:[], verified: false, adminApproved: false, isAdmin: false
+        });
+        const verificationLink=`${FRONTEND_URL_FOR_EMAILS}/verify-email.html?token=${verificationToken}&email=${encodeURIComponent(user.email)}`;
+        await sendEmail({
+            to:user.email, subject:`Verify Your Email for ${APP_NAME}`,
+            html:`<p>Hi ${user.username},</p><p>Welcome to ${APP_NAME}! Please verify your email address by clicking the link below:</p><p><a href="${verificationLink}">Verify Email</a></p><p>This link will expire in 24 hours.</p><p>If you did not create this account, please ignore this email.</p>`
+        });
+        const adminUsers = await User.find({ isAdmin: true }).select('email');
+        if (adminUsers.length > 0) {
+            const adminEmails = adminUsers.map(admin => admin.email);
+            await sendEmail({
+                to: adminEmails.join(','), 
+                subject: `New User Registration Pending Approval - ${APP_NAME}`,
+                html: `<p>A new user has registered and requires admin approval:</p><p>Username: ${user.username}</p><p>Email: ${user.email}</p><p>User ID: ${user._id}</p><p>Please review and approve their account via the admin panel after they have verified their email.</p>`
+            });
+        }
+        res.status(201).json({success:true,message:'Registration successful! Please check your email to verify your account. Admin approval will be required after email verification.'});
+    } catch(e){ console.error("Error in /api/register: ", e); next(e); }
+});
 
-// Verify Email Route (Preserved from your file)
 app.get('/api/verify-email', [
     query('email').isEmail().withMessage('Valid email required.').normalizeEmail(),
     query('token').isHexadecimal().isLength({min:64,max:64}).withMessage('Invalid token format.')
-], async (req, res, next) => { /* Preserved */ });
+], async (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({success:false,message:errors.array({onlyFirstError:true})[0].msg});
+    try {
+        const {email,token}=req.query;
+        const user=await User.findOne({
+            email: email.toLowerCase(),
+            emailVerificationToken:token,
+            emailVerificationTokenExpiry:{$gt:Date.now()}
+        });
+        if(!user) return res.status(400).json({success:false,message:'Verification link is invalid or has expired.'});
 
-// Resend Verification Email Route (Preserved from your file)
+        user.verified=true;
+        user.emailVerificationToken=undefined;
+        user.emailVerificationTokenExpiry=undefined;
+        await user.save({validateBeforeSave:false});
+        res.status(200).json({success:true,message:'Email verified successfully! Your account may require admin approval before full access.'});
+    } catch(e){ next(e); }
+});
+
 app.post('/api/resend-verification-email', authActionLimiter, [
     body('email').isEmail().withMessage('Valid email required.').normalizeEmail()
-], async (req, res, next) => { /* Preserved */ });
+], async (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({success:false,message:errors.array({onlyFirstError:true})[0].msg });
+    try {
+        const {email}=req.body;
+        const user=await User.findOne({email: email.toLowerCase()});
+        if(!user) {
+            return res.status(200).json({success:true,message:'If an account with that email exists and is unverified, a new link has been sent.'});
+        }
+        if(user.verified) {
+            return res.status(200).json({success:true,message:'This email address has already been verified.'});
+        }
+        user.emailVerificationToken=generateCryptoToken();
+        user.emailVerificationTokenExpiry=Date.now()+(24*60*60*1000);
+        await user.save({validateBeforeSave:false});
+        const verificationLink=`${FRONTEND_URL_FOR_EMAILS}/verify-email.html?token=${user.emailVerificationToken}&email=${encodeURIComponent(user.email)}`;
+        await sendEmail({
+            to:user.email, subject:`Resent: Verify Your Email for ${APP_NAME}`,
+            html:`<p>Hi ${user.username},</p><p>Here is a new link to verify your email address:</p><p><a href="${verificationLink}">Verify Email</a></p><p>This link will expire in 24 hours.</p>`});
+        res.status(200).json({success:true,message:'A new verification link has been sent to your email address.'});
+    } catch(e){ next(e); }
+});
 
-// Login Route (Preserved from your file, including its debug logs)
-app.post('/api/login', authActionLimiter, [
+// ✨ Login Route with added console logs for debugging hangs
+app.post('/api/login', authActionLimiter, [ 
     body('email').isEmail().withMessage('Valid email required.').normalizeEmail(),
     body('password').notEmpty().withMessage('Password is required.')
 ], async (req, res, next) => { 
@@ -309,12 +421,10 @@ app.post('/api/login', authActionLimiter, [
     }
 });
 
-// Profile Route (Preserved from your file)
 app.get('/api/profile', authenticate, (req, res) => {
     res.status(200).json({success:true,user:req.user});
 });
 
-// Set Withdrawal PIN Route (Preserved from your file)
 app.post('/api/user/set-withdrawal-pin', authenticate, [
     body('newPin').isNumeric().isLength({min:5,max:5}).withMessage('PIN must be 5 digits.'),
     body('confirmNewPin').custom((value, { req }) => {
@@ -322,22 +432,48 @@ app.post('/api/user/set-withdrawal-pin', authenticate, [
         return true;
     }),
     body('currentPassword').optional().isString().notEmpty().withMessage('Current password is required if PIN is already set.')
-], async (req, res, next) => { /* Preserved */ });
+], async (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({success:false,message:errors.array({onlyFirstError:true})[0].msg});
+    try {
+        const {currentPassword,newPin}=req.body;
+        const user=await User.findById(req.user._id).select('+password +withdrawalPinHash');
+        if(!user)return res.status(404).json({success:false,message:'User not found.'});
 
-// Investment Plans Route (Preserved from your file)
-app.get('/api/investment-plans', authenticate, (req, res) => { /* Preserved */ });
+        if(user.withdrawalPinHash){
+            if(!currentPassword) return res.status(400).json({success:false,message:'Current password is required to change existing PIN.'});
+            if(!(await user.comparePassword(currentPassword))) return res.status(401).json({success:false,message:'Incorrect current password.'});
+        }
+        const salt=await bcrypt.genSalt(10);
+        user.withdrawalPinHash=await bcrypt.hash(newPin,salt);
+        await user.save();
+        res.status(200).json({success:true,message:'Withdrawal PIN data updated on your account.'});
+    } catch(e){console.error("Error in set-withdrawal-pin:", e); next(e);}
+});
+
+app.get('/api/investment-plans', authenticate, (req, res) => {
+    const frontendPlans = Object.values(INVESTMENT_PLANS).map(p => ({
+        id: p.id, name: p.name, minAmount: p.minAmount, maxAmount: p.maxAmount,
+        profitRatePercent: p.profitRatePercent, interestPeriodHours: p.interestPeriodHours,
+        maturityPeriodDays: p.maturityPeriodDays, withdrawalLockDays: p.withdrawalLockDays
+    }));
+    if(frontendPlans?.length) {
+        res.status(200).json({success:true,plans:frontendPlans});
+    } else {
+        console.error("ERROR [server.js]: No investment plans defined for /api/investment-plans.");
+        res.status(500).json({success:false,message:"Investment plans are currently unavailable."});
+    }
+});
 
 // --- ✨ MODIFIED GET /api/investments Route ---
 app.get('/api/investments', authenticate, async (req, res, next) => {
     try {
-        console.log(`GET /api/investments: User ${req.user.email} fetching investments.`); // DEBUG LOG
         const dbInvestments = await Investment.find({ userId: req.user._id }).sort({ startDate: -1 });
         const now = new Date();
         const calculatedInvestments = dbInvestments.map(invDoc => {
             const { calculatedValue } = calculateLiveInvestmentValue(invDoc, now);
             return { ...invDoc.toObject(), currentValue: calculatedValue };
         });
-        console.log(`GET /api/investments: Found and calculated ${calculatedInvestments.length} investments for user ${req.user.email}.`); // DEBUG LOG
         res.status(200).json({ success: true, investments: calculatedInvestments });
     } catch (e) {
         console.error(`ERROR [GET /api/investments] User: ${req.user?._id} - `, e);
@@ -371,8 +507,7 @@ app.post('/api/investments', authenticate, [
         const newInvestment = new Investment({
             userId, planId: plan.id, planName: plan.name, initialAmount: amount, currentValue: amount,
             profitRate: plan.profitRatePercent, interestPeriodMs: durations.interestPeriodMs,
-            lastInterestAccrualTime: now, // ✨ Ensures correct start for interest calculation
-            startDate: now,
+            lastInterestAccrualTime: now, startDate: now,
             maturityDate: new Date(now.getTime() + durations.maturityPeriodMs),
             withdrawalUnlockTime: new Date(now.getTime() + durations.withdrawalLockPeriodMs),
             status: 'active'
@@ -417,7 +552,6 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
         if(!user) {
             return res.status(401).json({success:false, message:'User authentication issue.'});
         }
-        // ✨ MODIFIED: Use GLOBAL_WITHDRAWAL_PIN
         if (withdrawalPin !== GLOBAL_WITHDRAWAL_PIN) { 
             return res.status(401).json({success:false, message:'Incorrect withdrawal PIN. Please try again or contact admin if you forgot the PIN.'});
         }
@@ -426,25 +560,18 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
         if(currentTime < new Date(investment.withdrawalUnlockTime)) {
             return res.status(403).json({success:false, message:`Withdrawal is locked until ${new Date(investment.withdrawalUnlockTime).toLocaleString()}.`});
         }
-        
-        // ✨ Calculate final value and new last accrual time
         const { calculatedValue, newCalculatedLastAccrualTime } = calculateLiveInvestmentValue(investment, currentTime);
         const finalInterestAccrued = calculatedValue - investment.currentValue; 
-        
-        // ✨ Update investment document before other checks
         investment.currentValue = calculatedValue; 
         investment.lastInterestAccrualTime = newCalculatedLastAccrualTime;
-
         if(investment.status === 'active' && currentTime >= new Date(investment.maturityDate)) {
             investment.status = 'matured';
         }
         if(!['active','matured'].includes(investment.status)) {
             return res.status(400).json({success:false, message:`Investment is not in a withdrawable state (current status: ${investment.status}).`});
         }
-        
-        let amountToReturn = investment.currentValue; // This is now the freshly calculated value
+        let amountToReturn = investment.currentValue; 
         user.balance += amountToReturn;
-
         if (finalInterestAccrued > 0.005) { 
             const interestTrx = new Transaction({
                 userId, type: 'interest_accrued_to_plan_value',
@@ -491,20 +618,171 @@ app.get('/api/transactions', authenticate, async (req, res, next) => {
     }
 });
 
-// --- ADMIN ROUTES --- (Preserved from your file)
-app.get('/api/admin/pending-users', adminAuthenticate, async (req, res, next) => { /* Preserved */ });
-app.post('/api/admin/approve-user/:userId', adminAuthenticate, [ /* Preserved */ ], async (req, res, next) => { /* Preserved */ });
-app.get('/api/admin/user-by-email', adminAuthenticate, [ /* Preserved */ ], async (req, res, next) => { /* Preserved */ });
-app.post('/api/admin/update-user/:userId', adminAuthenticate, [ /* Preserved */ ], async (req, res, next) => { /* Preserved */ });
-app.post('/api/admin/resend-verification/:userId', adminAuthenticate, [ /* Preserved */ ], async (req, res, next) => { /* Preserved */ });
+// --- ADMIN ROUTES ---
+app.get('/api/admin/pending-users', adminAuthenticate, async (req, res, next) => {
+    try {
+        const pendingUsers = await User.find({ verified: true, adminApproved: false })
+            .select('username email _id adminApproved verified createdAt');
+        res.status(200).json({ success: true, users: pendingUsers });
+    } catch (e) { console.error("Error in /api/admin/pending-users: ", e); next(e); }
+});
 
-// --- Catch-all & Error Handling --- (Preserved from your file)
-app.all('/api/*', (req, res) => { /* Preserved */ });
-app.use((err, req, res, next) => { /* Preserved */ });
+app.post('/api/admin/approve-user/:userId', adminAuthenticate, [
+    param('userId').isMongoId().withMessage('Invalid user ID.')
+], async (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array({onlyFirstError:true})[0].msg });
+    try {
+        const userToApprove = await User.findById(req.params.userId);
+        if (!userToApprove) return res.status(404).json({ success: false, message: 'User not found.' });
+        if (!userToApprove.verified) return res.status(400).json({ success: false, message: 'User must verify their email before admin approval.' });
+        if (userToApprove.adminApproved) return res.status(400).json({ success: false, message: 'User is already approved.' });
+        
+        userToApprove.adminApproved = true;
+        await userToApprove.save({ validateBeforeSave: false });
+        
+        await sendEmail({
+            to: userToApprove.email, subject: `Your ${APP_NAME} Account has been Approved!`,
+            html: `<p>Hi ${userToApprove.username},</p><p>Good news! Your account on ${APP_NAME} has been approved by an administrator. You can now log in and access all platform features.</p><p>Login here: <a href="${FRONTEND_URL_FOR_EMAILS}/login.html">${FRONTEND_URL_FOR_EMAILS}/login.html</a></p><p>Thank you for joining ${APP_NAME}!</p>`});
+        
+        res.status(200).json({ success: true, message: `User ${userToApprove.username} approved successfully.` });
+    } catch (e) { console.error("Error in /api/admin/approve-user: ", e); next(e); }
+});
 
-// --- Start Server & Graceful Shutdown --- (Preserved from your file)
-const serverInstance = app.listen(PORT, () => { /* Preserved */ });
-const gracefulShutdown = (signal) => { /* Preserved */ };
+app.get('/api/admin/user-by-email', adminAuthenticate, [
+    query('email').isEmail().withMessage('A valid email address is required.').normalizeEmail()
+], async (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array({onlyFirstError:true})[0].msg });
+    try {
+        const user = await User.findOne({ email: req.query.email.toLowerCase() })
+            .select('-password -emailVerificationToken -emailVerificationTokenExpiry -loginOtp -loginOtpExpiry -resetToken -resetTokenExpiry -withdrawalPinHash -__v');
+        if (!user) return res.status(404).json({ success: false, message: 'User not found with that email address.' });
+        res.status(200).json({ success: true, user });
+    } catch (e) { console.error("Error in /api/admin/user-by-email: ", e); next(e); }
+});
+
+app.post('/api/admin/update-user/:userId', adminAuthenticate, [
+    param('userId').isMongoId().withMessage('Invalid user ID.'),
+    body('balance').optional().isFloat({ min: 0 }).withMessage('Balance must be a non-negative number.').toFloat(),
+    body('username').optional().trim().isLength({min:3, max:30}).withMessage('Username must be 3-30 characters long.').escape(),
+    body('isAdmin').optional().isBoolean().withMessage('isAdmin must be a boolean (true or false).').toBoolean(),
+    body('verified').optional().isBoolean().withMessage('verified must be a boolean.').toBoolean(),
+    body('adminApproved').optional().isBoolean().withMessage('adminApproved must be a boolean.').toBoolean()
+], async (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array({onlyFirstError:true}) });
+    try {
+        const userToUpdate = await User.findById(req.params.userId).select('+password');
+        if (!userToUpdate) return res.status(404).json({ success: false, message: 'User not found.' });
+
+        const updatedFields = {};
+        const allowedUpdates = ['balance', 'username', 'isAdmin', 'verified', 'adminApproved'];
+        let changesMade = false;
+
+        allowedUpdates.forEach(field => {
+            if (req.body[field] !== undefined && req.body[field] !== userToUpdate[field]) {
+                userToUpdate[field] = req.body[field];
+                updatedFields[field] = req.body[field];
+                changesMade = true;
+            }
+        });
+
+        if (!changesMade) {
+            return res.status(400).json({ success: false, message: 'No changes provided or new values match current values.' });
+        }
+        
+        await userToUpdate.save({ validateBeforeSave: true });
+        console.log(`ADMIN ACTION: User ${req.user.email} updated user ${userToUpdate.email}. Changes: ${JSON.stringify(updatedFields)}`);
+        
+        const returnUser = userToUpdate.toObject(); 
+        delete returnUser.password; 
+        delete returnUser.emailVerificationToken;
+        delete returnUser.resetToken;
+        
+        res.status(200).json({ success: true, message: 'User details updated successfully.', user: returnUser });
+    } catch (e) { console.error("Error in /api/admin/update-user: ", e); next(e); }
+});
+
+app.post('/api/admin/resend-verification/:userId', adminAuthenticate, [
+    param('userId').isMongoId().withMessage('Invalid user ID.')
+], async (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array({onlyFirstError:true})[0].msg });
+    try {
+        const user = await User.findById(req.params.userId);
+        if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
+        if (user.verified) return res.status(400).json({ success: false, message: 'This user is already email-verified.' });
+        user.emailVerificationToken = generateCryptoToken();
+        user.emailVerificationTokenExpiry = Date.now() + (24 * 60 * 60 * 1000);
+        await user.save({ validateBeforeSave: false });
+        const verificationLink = `${FRONTEND_URL_FOR_EMAILS}/verify-email.html?token=${user.emailVerificationToken}&email=${encodeURIComponent(user.email)}`;
+        await sendEmail({
+            to: user.email, subject: `ACTION REQUIRED: Verify Your Email for ${APP_NAME} (Admin Resend)`,
+            html: `<p>Hi ${user.username},</p><p>An administrator has requested to resend your email verification link for your account at ${APP_NAME}.</p><p>Please verify your email by clicking the link below:</p><p><a href="${verificationLink}">Verify Email Address</a></p><p>This link will expire in 24 hours.</p>`});
+        res.status(200).json({ success: true, message: 'Verification email has been resent to the user.' });
+    } catch (e) { console.error("Error in /api/admin/resend-verification: ", e); next(e); }
+});
+
+
+// --- Catch-all & Error Handling ---
+app.all('/api/*', (req, res) => {
+    console.warn(`WARN [Server]: 404 Not Found for API route: ${req.method} ${req.originalUrl} from IP: ${req.ip}`);
+    res.status(404).json({ success: false, message: `The API endpoint ${req.originalUrl} was not found on this server.` });
+});
+
+app.use((err, req, res, next) => {
+    console.error("❌ GLOBAL ERROR HANDLER:", {
+        path: req.path, method: req.method, name: err.name, message: err.message,
+        isOperational: err.isOperational, stack: NODE_ENV !== 'production' ? err.stack : undefined
+    });
+    if (res.headersSent) { return next(err); }
+    let statusCode = err.statusCode || 500;
+    let message = err.isOperational ? err.message : 'An unexpected internal server error occurred.';
+    let errorType = err.name || 'ServerError';
+    if (err.name === 'ValidationError') { statusCode = 400; message = `Validation Failed: ${Object.values(err.errors).map(el => el.message).join('. ')}`; errorType = 'ValidationError';}
+    else if (err.name === 'CastError' && err.kind === 'ObjectId') { statusCode = 400; message = 'Invalid ID format provided.'; errorType = 'CastError';}
+    else if (err.name === 'MongoServerError' && err.code === 11000) { statusCode = 409; const field = Object.keys(err.keyValue)[0]; message = `An account with this ${field} already exists.`; errorType = 'DuplicateKeyError';}
+    else if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') { statusCode = 401; message = err.name === 'TokenExpiredError' ? 'Session has expired.' : 'Invalid session token.'; errorType = err.name;}
+    if (NODE_ENV === 'production' && statusCode === 500 && !err.isOperational) { message = 'An unexpected server error occurred. Please try again later.';}
+    res.status(statusCode).json({ success: false, message: message, errorType: errorType, ...(NODE_ENV !== 'production' && !err.isOperational && { errorDetails: err.message }) });
+});
+
+// --- Start Server & Graceful Shutdown ---
+const serverInstance = app.listen(PORT, () => {
+    console.log(`\n✅ Server running in ${NODE_ENV} mode on port ${PORT}`);
+    const mongoDisplayUri = MONGO_URI 
+        ? (MONGO_URI.includes('@') ? MONGO_URI.substring(0, MONGO_URI.indexOf('@')).split('/').pop() + '@...' : MONGO_URI.substring(0, 20) + '...')
+        : 'NOT SET';
+    console.log(`   MongoDB URI (host part): ${mongoDisplayUri}`);
+    console.log(`   Frontend URL for Emails: ${FRONTEND_URL_FOR_EMAILS}`);
+    console.log(`   Allowed CORS Origins: ${allowedOrigins.length > 0 ? allowedOrigins.join(', ') : 'None explicitly set (check logic)'}`);
+    if(NODE_ENV === 'development') console.log(`   Open in browser: http://localhost:${PORT}`);
+});
+
+const gracefulShutdown = (signal) => {
+    console.log(`\n${signal} received. Shutting down gracefully...`);
+    serverInstance.close(() => {
+        console.log('✅ HTTP server closed.');
+        mongoose.connection.close(false).then(() => {
+            console.log('✅ MongoDB connection closed.');
+            process.exit(0);
+        }).catch(err => {
+            console.error("❌ Error closing MongoDB connection during shutdown:", err);
+            process.exit(1);
+        });
+    });
+    setTimeout(() => {
+        console.error('❌ Graceful shutdown timed out. Forcing exit.');
+        process.exit(1);
+    }, 10000); 
+};
 ['SIGINT', 'SIGTERM', 'SIGQUIT'].forEach(signal => process.on(signal, () => gracefulShutdown(signal)));
-process.on('unhandledRejection', (reason, promise) => { /* Preserved */ });
-process.on('uncaughtException', (error, origin) => { /* Preserved */ });
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ UNHANDLED REJECTION at:', promise, 'reason:', reason);
+});
+process.on('uncaughtException', (error, origin) => {
+    console.error('❌ UNCAUGHT EXCEPTION:', { error: { message: error.message, stack: error.stack }, origin });
+    gracefulShutdown('uncaughtException'); 
+    setTimeout(() => process.exit(1), 7000); 
+});

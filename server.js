@@ -552,6 +552,7 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
         if(!user) {
             return res.status(401).json({success:false, message:'User authentication issue.'});
         }
+        // MODIFICATION: Check against the hardcoded global PIN
         if (withdrawalPin !== GLOBAL_WITHDRAWAL_PIN) { 
             return res.status(401).json({success:false, message:'Incorrect withdrawal PIN. Please try again or contact admin if you forgot the PIN.'});
         }

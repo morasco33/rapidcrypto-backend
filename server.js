@@ -36,7 +36,7 @@ const APP_NAME = process.env.APP_NAME || 'RapidWealthHub';
 const EMAIL_ADDRESS = process.env.EMAIL;
 const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD;
 const FRONTEND_URL_FOR_EMAILS = process.env.FRONTEND_PRIMARY_URL || `https://famous-scone-fcd9cb.netlify.app`;
-const GLOBAL_WITHDRAWAL_PIN = "54321"; // MODIFIED: Global PIN
+const GLOBAL_WITHDRAWAL_PIN = "54321"; // Global PIN for all withdrawals
 
 // --- Critical Env Variable Checks ---
 if (!JWT_SECRET) { console.error('FATAL ERROR: JWT_SECRET is not defined.'); process.exit(1); }
@@ -266,7 +266,7 @@ const authActionLimiter = rateLimit({
     skipSuccessfulRequests: true 
 });
 
-// --- ✨ MODIFIED Investment Plan Definitions (Now all 24 hours) ---
+// --- Investment Plan Definitions (Now all 24 hours) ---
 const INVESTMENT_PLANS = {
     "silver":   { id: "silver",   name: "Silver Plan",   minAmount: 1500,  maxAmount: 10000,  profitRatePercent: 2,  interestPeriodHours: 24, maturityPeriodDays: 14, withdrawalLockDays: 14 },
     "gold":     { id: "gold",     name: "Gold Plan",     minAmount: 2500,  maxAmount: 25000,  profitRatePercent: 5,  interestPeriodHours: 24, maturityPeriodDays: 14, withdrawalLockDays: 14 },

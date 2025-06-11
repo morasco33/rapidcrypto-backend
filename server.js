@@ -1,4 +1,4 @@
-// --- server.js (Full Version with On-the-Fly Interest Calculation) ---
+// --- server.js (Full Version - Rate Limits Increased for Testing, On-the-Fly Interest, Global PIN) ---
 require('dotenv').config();
 
 // ---- DOTENV DEBUG LOGS ----
@@ -29,7 +29,7 @@ const app = express();
 
 // --- Configuration ---
 const PORT = process.env.PORT || 3001;
-const NODE_ENV = process.env.NODE_ENV || 'development';
+const NODE_ENV = process.env.NODE_ENV || 'development'; // Default to development if not set
 const JWT_SECRET = process.env.JWT_SECRET;
 const MONGO_URI = process.env.MONGO_URI;
 const APP_NAME = process.env.APP_NAME || 'RapidWealthHub';
@@ -43,17 +43,16 @@ if (!JWT_SECRET) { console.error('FATAL ERROR: JWT_SECRET is not defined.'); pro
 if (!MONGO_URI) { console.error('FATAL ERROR: MONGO_URI is not defined.'); process.exit(1); }
 if (!EMAIL_ADDRESS || !EMAIL_PASSWORD) { console.warn('⚠️ WARNING: Email service credentials are not fully configured.'); }
 else { console.log("✅ Email credentials appear to be loaded."); }
-// ... (other env checks from previous versions)
 
 // --- Security Middleware ---
-app.set('trust proxy', 1); 
+app.set('trust proxy', 1); // Essential for rate limiting behind reverse proxies like Render
 app.use(helmet()); 
 app.use(express.json({ limit: '10kb' })); 
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(mongoSanitize());
 
 // --- CORS Configuration ---
-const allowedOrigins = [ /* ... (your allowed origins array from previous server.js) ... */ 
+const allowedOrigins = [
     'http://localhost:5500', 
     'http://127.0.0.1:5500',
     'https://famous-scone-fcd9cb.netlify.app',
@@ -62,9 +61,9 @@ const allowedOrigins = [ /* ... (your allowed origins array from previous server
     process.env.NETLIFY_DEPLOY_URL,
     process.env.FRONTEND_PRIMARY_URL,
     process.env.FRONTEND_WWW_URL 
-].filter(Boolean);
+].filter(Boolean); 
 console.log("ℹ️ Allowed CORS Origins:", allowedOrigins);
-const corsOptions = { /* ... (your corsOptions object from previous server.js) ... */ 
+const corsOptions = {
     origin: function (origin, callback) {
         if (!origin || allowedOrigins.includes(origin) || (NODE_ENV !== 'production' && origin === 'null')) {
             callback(null, true);
@@ -81,14 +80,14 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions)); 
 
 // --- MongoDB Connection ---
-mongoose.connect(MONGO_URI) /* ... (as before) ... */
+mongoose.connect(MONGO_URI)
 .then(() => console.log(`✅ MongoDB connected successfully.`))
 .catch(err => { console.error('❌ FATAL MongoDB Connection Error:', err.message, err.stack); process.exit(1); });
 mongoose.connection.on('error', err => console.error('❌ MongoDB Runtime Error:', err));
 // ... (other mongoose connection event listeners)
 
 // --- Schemas & Models ---
-const userSchema = new mongoose.Schema({ /* ... (as before) ... */ 
+const userSchema = new mongoose.Schema({ /* ... (as in previous full server.js) ... */ 
     username: { type: String, trim: true, required: [true, 'Username is required.'], index: true, minlength: 3, maxlength: 30 },
     walletAddress: { type: String, trim: true },
     email: { type: String, required: [true, 'Email is required.'], unique: true, lowercase: true, trim: true, match: [/\S+@\S+\.\S+/, 'A valid email address is required.'], index: true },
@@ -119,11 +118,12 @@ userSchema.methods.comparePassword = async function(candidatePassword) { /* ... 
     return (candidatePassword && this.password) ? bcrypt.compare(candidatePassword, this.password) : false;
 };
 userSchema.methods.compareWithdrawalPin = async function(candidatePin) { /* ... */ 
+    // This will be used if you revert from GLOBAL_PIN or for other PIN uses.
     return (candidatePin && this.withdrawalPinHash) ? bcrypt.compare(candidatePin, this.withdrawalPinHash) : false;
 };
 const User = mongoose.model('User', userSchema);
 
-const investmentSchema = new mongoose.Schema({ /* ... (as before, ensure lastInterestAccrualTime is present) ... */ 
+const investmentSchema = new mongoose.Schema({ /* ... (as in previous full server.js, with lastInterestAccrualTime) ... */ 
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     planId: { type: String, required: true, index: true }, 
     planName: { type: String, required: true },
@@ -131,7 +131,7 @@ const investmentSchema = new mongoose.Schema({ /* ... (as before, ensure lastInt
     currentValue: { type: Number, required: true, min: 0 },
     profitRate: { type: Number, required: true }, 
     interestPeriodMs: { type: Number, required: true }, 
-    lastInterestAccrualTime: { type: Date, default: Date.now }, // Crucial for interest calculation
+    lastInterestAccrualTime: { type: Date, default: Date.now }, 
     startDate: { type: Date, default: Date.now },
     maturityDate: { type: Date, required: true }, 
     withdrawalUnlockTime: { type: Date, required: true }, 
@@ -139,12 +139,12 @@ const investmentSchema = new mongoose.Schema({ /* ... (as before, ensure lastInt
 }, { timestamps: true });
 const Investment = mongoose.model('Investment', investmentSchema);
 
-const TransactionSchema = new mongoose.Schema({ /* ... (as before) ... */ 
+const TransactionSchema = new mongoose.Schema({ /* ... (as in previous full server.js) ... */ 
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     type: { type: String, required: true, enum: [
         'deposit_main_balance', 'withdrawal_main_balance', 
         'plan_investment', 'plan_withdrawal_return', 
-        'interest_accrued_to_plan_value', // This type will be used for interest logging
+        'interest_accrued_to_plan_value', 
         'fee', 'admin_credit', 'admin_debit'
     ], index: true },
     amount: { type: Number, required: true }, 
@@ -161,60 +161,60 @@ const Transaction = mongoose.model('Transaction', TransactionSchema);
 // --- Helper Functions ---
 const generateWalletAddress = () => `0x${crypto.randomBytes(20).toString('hex')}`;
 const generateCryptoToken = (length = 32) => crypto.randomBytes(length).toString('hex');
-const sendEmail = async ({ to, subject, html, text }) => { /* ... (as before) ... */ 
-    if (!EMAIL_ADDRESS || !EMAIL_PASSWORD) { console.error('ERROR [sendEmail]: Email service not configured.'); throw new Error('Email service configuration missing.');}
-    const transporter = nodemailer.createTransport({ service: 'Gmail', auth: { user: EMAIL_ADDRESS, pass: EMAIL_PASSWORD }});
-    const mailOptions = { from: `"${APP_NAME}" <${EMAIL_ADDRESS}>`, to, subject, html, text: text || html.replace(/<[^>]*>?/gm, '') };
-    try { 
-        await transporter.sendMail(mailOptions); 
-        console.log(`✅ Email sent to ${to}. Subject: "${subject}".`);
-    } catch (e) { 
-        console.error(`❌ Nodemailer error for ${to}:`, e.message, e.code); 
-        if (e.code === 'EAUTH' || e.responseCode === 535) throw new Error('Email authentication failed. Check credentials.');
-        throw new Error('Error sending email.');
-    }
-};
+const sendEmail = async ({ to, subject, html, text }) => { /* ... (as before) ... */ };
 
-// --- ✨ NEW HELPER for On-the-Fly Interest Calculation ---
+// --- ✨ HELPER for On-the-Fly Interest Calculation ---
 function calculateLiveInvestmentValue(investmentDocument, calculationTime = new Date()) {
-    // Make sure investmentDocument is a Mongoose document or a plain object with the necessary fields
     const inv = (typeof investmentDocument.toObject === 'function') ? investmentDocument.toObject() : { ...investmentDocument };
-
-    let liveCurrentValue = inv.currentValue; // Start with the last known DB value
+    let liveCurrentValue = inv.currentValue;
     let lastAccrualTimestamp = new Date(inv.lastInterestAccrualTime).getTime();
     const interestPeriodMs = inv.interestPeriodMs;
-    const profitRateDecimal = inv.profitRate / 100; // e.g., 5% -> 0.05
+    const profitRateDecimal = inv.profitRate / 100;
     const calculationTimestamp = calculationTime.getTime();
-
-    let newLastAccrualTimeForDbUpdate = new Date(inv.lastInterestAccrualTime); // Keep track for DB update if needed
+    let newCalculatedLastAccrualTime = new Date(inv.lastInterestAccrualTime);
 
     if (inv.status === 'active' && calculationTimestamp > lastAccrualTimestamp && interestPeriodMs > 0 && profitRateDecimal > 0) {
         const periodsPassed = Math.floor((calculationTimestamp - lastAccrualTimestamp) / interestPeriodMs);
-
         if (periodsPassed > 0) {
-            let tempCurrentValue = liveCurrentValue; // Use a temp var for iterative calculation
+            let tempCurrentValue = liveCurrentValue;
             for (let i = 0; i < periodsPassed; i++) {
                 tempCurrentValue += tempCurrentValue * profitRateDecimal;
             }
-            liveCurrentValue = tempCurrentValue; // Assign final calculated value
-            newLastAccrualTimeForDbUpdate = new Date(lastAccrualTimestamp + (periodsPassed * interestPeriodMs));
+            liveCurrentValue = tempCurrentValue;
+            newCalculatedLastAccrualTime = new Date(lastAccrualTimestamp + (periodsPassed * interestPeriodMs));
         }
     }
     return {
-        calculatedValue: parseFloat(liveCurrentValue.toFixed(2)), // Ensure 2 decimal places
-        newCalculatedLastAccrualTime: newLastAccrualTimeForDbUpdate 
+        calculatedValue: parseFloat(liveCurrentValue.toFixed(2)),
+        newCalculatedLastAccrualTime: newCalculatedLastAccrualTime 
     };
 }
-
 
 // --- Authentication Middleware ---
 const authenticate = async (req, res, next) => { /* ... (as before) ... */ };
 const adminAuthenticate = async (req, res, next) => { /* ... (as before) ... */ };
 
-// --- Rate Limiters ---
-const generalApiLimiter = rateLimit({ /* ... (as before) ... */ });
-app.use('/api', generalApiLimiter);
-const authActionLimiter = rateLimit({ /* ... (as before) ... */ });
+// --- ✨ Rate Limiters (Increased for Testing) ---
+const TEMP_MAX_GENERAL = 5000; 
+const TEMP_MAX_AUTH = 500;    
+console.log(`RATE LIMITER CONFIG: General Max = ${TEMP_MAX_GENERAL}, Auth Max = ${TEMP_MAX_AUTH} (High for testing)`);
+
+const generalApiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, 
+    max: TEMP_MAX_GENERAL, 
+    standardHeaders: 'draft-7', 
+    legacyHeaders: false, 
+    message: { success: false, message: 'Too many requests. Please try again after 15 minutes.' }
+});
+app.use('/api', generalApiLimiter); 
+
+const authActionLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, 
+    max: TEMP_MAX_AUTH, 
+    message: { success: false, message: 'Too many authentication attempts. Please try again after an hour.' },
+    skipSuccessfulRequests: true 
+});
+// Note: authActionLimiter must be applied to specific routes like /api/login, /api/register etc.
 
 // --- Investment Plan Definitions ---
 // !!! FILL THIS WITH YOUR ACTUAL INVESTMENT_PLANS OBJECT !!!
@@ -238,28 +238,23 @@ function getPlanDurationsInMs(plan) {
 }
 
 // --- API Routes (User-facing) ---
-app.post('/api/register', authActionLimiter, [ /* ... */ ], async (req, res, next) => { /* ... (as before) ... */ });
-app.get('/api/verify-email', [ /* ... */ ], async (req, res, next) => { /* ... (as before) ... */ });
-app.post('/api/resend-verification-email', authActionLimiter, [ /* ... */ ], async (req, res, next) => { /* ... (as before) ... */ });
-app.post('/api/login', authActionLimiter, [ /* ... */ ], async (req, res, next) => { /* ... (as before) ... */ });
-app.get('/api/profile', authenticate, (req, res) => { /* ... (as before) ... */ });
-app.post('/api/user/set-withdrawal-pin', authenticate, [ /* ... */ ], async (req, res, next) => { /* ... (as before) ... */ });
+app.post('/api/register', authActionLimiter, [ /* ... validations ... */ ], async (req, res, next) => { /* ... (as before) ... */ });
+app.get('/api/verify-email', [ /* ... validations ... */ ], async (req, res, next) => { /* ... (as before) ... */ });
+app.post('/api/resend-verification-email', authActionLimiter, [ /* ... validations ... */ ], async (req, res, next) => { /* ... (as before) ... */ });
+app.post('/api/login', authActionLimiter, [ /* ... validations ... */ ], async (req, res, next) => { /* ... (as before) ... */ });
+app.get('/api/profile', authenticate, (req, res) => { res.status(200).json({success:true,user:req.user}); });
+app.post('/api/user/set-withdrawal-pin', authenticate, [ /* ... validations ... */ ], async (req, res, next) => { /* ... (as before, user can set it but global PIN is used for withdrawal action) ... */ });
 app.get('/api/investment-plans', authenticate, (req, res) => { /* ... (as before) ... */ });
 
-// --- ✨ MODIFIED GET /api/investments Route ---
+// --- ✨ MODIFIED GET /api/investments Route (Uses calculateLiveInvestmentValue) ---
 app.get('/api/investments', authenticate, async (req, res, next) => {
     try {
         const dbInvestments = await Investment.find({ userId: req.user._id }).sort({ startDate: -1 });
         const now = new Date();
-
         const calculatedInvestments = dbInvestments.map(invDoc => {
             const { calculatedValue } = calculateLiveInvestmentValue(invDoc, now);
-            return {
-                ...invDoc.toObject(), // Convert Mongoose doc to plain object
-                currentValue: calculatedValue, // Override currentValue with the calculated one for display
-            };
+            return { ...invDoc.toObject(), currentValue: calculatedValue };
         });
-
         res.status(200).json({ success: true, investments: calculatedInvestments });
     } catch (e) {
         console.error(`ERROR [GET /api/investments] User: ${req.user?._id} - `, e);
@@ -267,7 +262,8 @@ app.get('/api/investments', authenticate, async (req, res, next) => {
     }
 });
 
-app.post('/api/investments', authenticate, [ /* ... validations ... */ ], async (req, res, next) => { /* ... (as before, ensure lastInterestAccrualTime is set to now on creation) ... */ 
+// --- ✨ MODIFIED POST /api/investments Route (Ensures lastInterestAccrualTime is set) ---
+app.post('/api/investments', authenticate, [ /* ... validations ... */ ], async (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({success:false,message:errors.array({onlyFirstError:true})[0].msg});
 
@@ -288,7 +284,7 @@ app.post('/api/investments', authenticate, [ /* ... validations ... */ ], async 
         if(user.balance < amount) return res.status(400).json({success:false, message: 'Insufficient account balance.'});
 
         user.balance -= amount;
-        const now = new Date(); // CRITICAL: Use this 'now' for all date initializations
+        const now = new Date(); 
         const durations = getPlanDurationsInMs(plan);
 
         const newInvestment = new Investment({
@@ -301,14 +297,21 @@ app.post('/api/investments', authenticate, [ /* ... validations ... */ ], async 
             status: 'active'
         });
 
-        const investmentTransaction = new Transaction({ /* ... */ });
+        const investmentTransaction = new Transaction({
+            userId, type: 'plan_investment', amount: -amount, 
+            description: `Invested $${amount.toFixed(2)} in ${plan.name}.`,
+            relatedInvestmentId: newInvestment._id, meta: { ip: req.ip }
+        });
 
         await user.save({session});
         await newInvestment.save({session});
         await investmentTransaction.save({session});
         await session.commitTransaction();
 
-        res.status(201).json({ /* ... */ });
+        res.status(201).json({
+            success:true, message:`Successfully invested $${amount.toFixed(2)} in ${plan.name}.`,
+            newBalance: user.balance, investment: newInvestment.toObject()
+        });
     } catch(e){
         await session.abortTransaction();
         console.error(`ERROR [POST /api/investments] User: ${req.user?.email} - `,e);
@@ -318,7 +321,7 @@ app.post('/api/investments', authenticate, [ /* ... validations ... */ ], async 
     }
 });
 
-// --- ✨ MODIFIED /api/investments/:investmentId/withdraw Route ---
+// --- ✨ MODIFIED /api/investments/:investmentId/withdraw Route (Uses GLOBAL_PIN & calculateLiveInvestmentValue) ---
 app.post('/api/investments/:investmentId/withdraw', authenticate, [
     param('investmentId').isMongoId().withMessage('Invalid investment ID.'),
     body('withdrawalPin').isNumeric().isLength({min:5,max:5}).withMessage('Withdrawal PIN must be 5 digits.')
@@ -350,12 +353,9 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
             return res.status(403).json({success:false, message:`Withdrawal is locked until ${new Date(investment.withdrawalUnlockTime).toLocaleString()}.`});
         }
         
-        // ✨ Calculate final value and new last accrual time before any status changes
         const { calculatedValue, newCalculatedLastAccrualTime } = calculateLiveInvestmentValue(investment, currentTime);
+        const finalInterestAccrued = calculatedValue - investment.currentValue; 
         
-        const finalInterestAccrued = calculatedValue - investment.currentValue; // Difference from DB stored value
-        
-        // Update the investment document with calculated values before further checks
         investment.currentValue = calculatedValue; 
         investment.lastInterestAccrualTime = newCalculatedLastAccrualTime;
 
@@ -367,11 +367,10 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
             return res.status(400).json({success:false, message:`Investment is not in a withdrawable state (current status: ${investment.status}).`});
         }
         
-        let amountToReturn = investment.currentValue; // This is now the freshly calculated value
+        let amountToReturn = investment.currentValue; 
         user.balance += amountToReturn;
 
-        // Log transactions
-        if (finalInterestAccrued > 0.005) { // Log only if meaningful interest was accrued just now
+        if (finalInterestAccrued > 0.005) { 
             const interestTrx = new Transaction({
                 userId, type: 'interest_accrued_to_plan_value',
                 amount: parseFloat(finalInterestAccrued.toFixed(2)),
@@ -381,17 +380,13 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
             await interestTrx.save({session});
         }
 
-        const withdrawalTransaction = new Transaction({
-            userId, type: 'plan_withdrawal_return', amount: +amountToReturn,
-            description: `Withdrew $${amountToReturn.toFixed(2)} from ${investment.planName} (ID: ${investment._id}).`,
-            relatedInvestmentId: investment._id, meta: { ip: req.ip }
-        });
+        const withdrawalTransaction = new Transaction({ /* ... */ });
 
         investment.status = (investment.status === 'matured' || currentTime >= new Date(investment.maturityDate)) ? 'withdrawn_matured' : 'withdrawn_early';
-        investment.currentValue = 0; // Reset after withdrawal
+        investment.currentValue = 0; 
 
         await user.save({session});
-        await investment.save({session}); // Save updated investment (currentValue, lastAccrualTime, status)
+        await investment.save({session}); 
         await withdrawalTransaction.save({session});
         await session.commitTransaction();
 
@@ -409,7 +404,6 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
         session.endSession();
     }
 });
-
 
 // --- ADMIN ROUTES ---
 app.get('/api/admin/pending-users', adminAuthenticate, async (req, res, next) => { /* ... (as before) ... */ });

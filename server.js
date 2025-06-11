@@ -181,7 +181,7 @@ const sendEmail = async ({ to, subject, html, text }) => {
     }
 };
 
-// --- ✨ HELPER for On-the-Fly Interest Calculation ---
+// --- HELPER for On-the-Fly Interest Calculation ---
 function calculateLiveInvestmentValue(investmentDocument, calculationTime = new Date()) {
     const inv = (typeof investmentDocument.toObject === 'function') ? investmentDocument.toObject() : { ...investmentDocument };
     let liveCurrentValue = inv.currentValue;
@@ -245,7 +245,7 @@ const adminAuthenticate = async (req, res, next) => {
     });
 };
 
-// --- ✨ Rate Limiters (Increased for Testing) ---
+// --- Rate Limiters (Increased for Testing) ---
 const TEMP_MAX_GENERAL = 5000; 
 const TEMP_MAX_AUTH = 500;    
 console.log(`RATE LIMITER CONFIG: General Max = ${TEMP_MAX_GENERAL}, Auth Max = ${TEMP_MAX_AUTH} (High for testing)`);
@@ -266,13 +266,14 @@ const authActionLimiter = rateLimit({
     skipSuccessfulRequests: true 
 });
 
-// --- Investment Plan Definitions ---
+// --- ✨ MODIFIED Investment Plan Definitions (14-Day Maturity) ---
 const INVESTMENT_PLANS = {
-    "silver":   { id: "silver",   name: "Silver Plan", minAmount: 1500,  maxAmount: 10000,  profitRatePercent: 2,  interestPeriodHours: 48, maturityPeriodDays: 2, withdrawalLockDays: 2 },
-    "gold":     { id: "gold",     name: "Gold Plan",   minAmount: 2500,  maxAmount: 25000,  profitRatePercent: 5,  interestPeriodHours: 24, maturityPeriodDays: 2, withdrawalLockDays: 2 },
-    "premium":  { id: "premium",  name: "Premium Plan",minAmount: 5000,  maxAmount: 50000,  profitRatePercent: 10, interestPeriodHours: 48, maturityPeriodDays: 2, withdrawalLockDays: 2 },
-    "platinum": { id: "platinum", name: "Platinum Plan",minAmount: 10000, maxAmount: 100000, profitRatePercent: 20, interestPeriodHours: 12, maturityPeriodDays: 2, withdrawalLockDays: 2 }
+    "silver":   { id: "silver",   name: "Silver Plan",   minAmount: 1500,  maxAmount: 10000,  profitRatePercent: 2,  interestPeriodHours: 48, maturityPeriodDays: 14, withdrawalLockDays: 14 },
+    "gold":     { id: "gold",     name: "Gold Plan",     minAmount: 2500,  maxAmount: 25000,  profitRatePercent: 5,  interestPeriodHours: 24, maturityPeriodDays: 14, withdrawalLockDays: 14 },
+    "premium":  { id: "premium",  name: "Premium Plan",  minAmount: 5000,  maxAmount: 50000,  profitRatePercent: 10, interestPeriodHours: 48, maturityPeriodDays: 14, withdrawalLockDays: 14 },
+    "platinum": { id: "platinum", name: "Platinum Plan", minAmount: 10000, maxAmount: 100000, profitRatePercent: 20, interestPeriodHours: 12, maturityPeriodDays: 14, withdrawalLockDays: 14 }
 };
+
 function getPlanDurationsInMs(plan) {
     if (!plan || typeof plan.interestPeriodHours !== 'number' || typeof plan.maturityPeriodDays !== 'number' || typeof plan.withdrawalLockDays !== 'number') {
         console.error("ERROR [getPlanDurationsInMs]: Invalid plan configuration:", plan); 
@@ -370,7 +371,6 @@ app.post('/api/resend-verification-email', authActionLimiter, [
     } catch(e){ next(e); }
 });
 
-// ✨ Login Route with added console logs for debugging hangs
 app.post('/api/login', authActionLimiter, [ 
     body('email').isEmail().withMessage('Valid email required.').normalizeEmail(),
     body('password').notEmpty().withMessage('Password is required.')
@@ -425,30 +425,106 @@ app.get('/api/profile', authenticate, (req, res) => {
     res.status(200).json({success:true,user:req.user});
 });
 
-app.post('/api/user/set-withdrawal-pin', authenticate, [
-    body('newPin').isNumeric().isLength({min:5,max:5}).withMessage('PIN must be 5 digits.'),
-    body('confirmNewPin').custom((value, { req }) => {
-        if (value !== req.body.newPin) throw new Error('New PINs do not match.');
-        return true;
-    }),
-    body('currentPassword').optional().isString().notEmpty().withMessage('Current password is required if PIN is already set.')
+app.post('/api/deposit', authenticate, [
+    body('amount').isFloat({ gt: 0 }).withMessage('Deposit amount must be a positive number.').toFloat()
 ], async (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({success:false,message:errors.array({onlyFirstError:true})[0].msg});
+    
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
-        const {currentPassword,newPin}=req.body;
-        const user=await User.findById(req.user._id).select('+password +withdrawalPinHash');
-        if(!user)return res.status(404).json({success:false,message:'User not found.'});
-
-        if(user.withdrawalPinHash){
-            if(!currentPassword) return res.status(400).json({success:false,message:'Current password is required to change existing PIN.'});
-            if(!(await user.comparePassword(currentPassword))) return res.status(401).json({success:false,message:'Incorrect current password.'});
+        const { amount } = req.body;
+        const user = await User.findById(req.user._id).session(session);
+        if (!user) {
+            await session.abortTransaction();
+            return res.status(404).json({success:false, message: 'User not found.'});
         }
-        const salt=await bcrypt.genSalt(10);
-        user.withdrawalPinHash=await bcrypt.hash(newPin,salt);
-        await user.save();
-        res.status(200).json({success:true,message:'Withdrawal PIN data updated on your account.'});
-    } catch(e){console.error("Error in set-withdrawal-pin:", e); next(e);}
+
+        user.balance += amount;
+
+        const depositTransaction = new Transaction({
+            userId: user._id,
+            type: 'deposit_main_balance',
+            amount: amount,
+            description: `Simulated deposit of $${amount.toFixed(2)} to main balance.`,
+            status: 'completed',
+            meta: { ip: req.ip }
+        });
+
+        await user.save({ session });
+        await depositTransaction.save({ session });
+        await session.commitTransaction();
+
+        res.status(200).json({
+            success: true,
+            message: `Successfully deposited $${amount.toFixed(2)}. Your new balance is $${user.balance.toFixed(2)}.`,
+            newBalance: user.balance
+        });
+    } catch (e) {
+        await session.abortTransaction();
+        console.error(`ERROR [POST /api/deposit] User: ${req.user?.email} - `, e);
+        next(new Error("Deposit failed due to a server error."));
+    } finally {
+        session.endSession();
+    }
+});
+
+app.post('/api/withdraw', authenticate, [
+    body('amount').isFloat({ gt: 0 }).withMessage('Withdrawal amount must be a positive number.').toFloat(),
+    body('withdrawalPin').isNumeric().isLength({min:5,max:5}).withMessage('Withdrawal PIN must be 5 digits.')
+], async (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({success:false,message:errors.array({onlyFirstError:true})[0].msg});
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+        const { amount, withdrawalPin } = req.body;
+
+        if (withdrawalPin !== GLOBAL_WITHDRAWAL_PIN) {
+            await session.abortTransaction();
+            return res.status(401).json({success:false, message:'Incorrect withdrawal PIN.'});
+        }
+
+        const user = await User.findById(req.user._id).session(session);
+        if (!user) {
+            await session.abortTransaction();
+            return res.status(404).json({success:false, message: 'User not found.'});
+        }
+
+        if (user.balance < amount) {
+            await session.abortTransaction();
+            return res.status(400).json({success:false, message: 'Insufficient balance.'});
+        }
+
+        user.balance -= amount;
+
+        const withdrawalTransaction = new Transaction({
+            userId: user._id,
+            type: 'withdrawal_main_balance',
+            amount: -amount,
+            description: `Withdrawal of $${amount.toFixed(2)} from main balance.`,
+            status: 'completed',
+            meta: { ip: req.ip }
+        });
+
+        await user.save({ session });
+        await withdrawalTransaction.save({ session });
+        await session.commitTransaction();
+
+        res.status(200).json({
+            success: true,
+            message: `Successfully withdrew $${amount.toFixed(2)}. Your new balance is $${user.balance.toFixed(2)}.`,
+            newBalance: user.balance
+        });
+    } catch (e) {
+        await session.abortTransaction();
+        console.error(`ERROR [POST /api/withdraw] User: ${req.user?.email} - `, e);
+        next(new Error("Withdrawal failed due to a server error."));
+    } finally {
+        session.endSession();
+    }
 });
 
 app.get('/api/investment-plans', authenticate, (req, res) => {
@@ -465,7 +541,6 @@ app.get('/api/investment-plans', authenticate, (req, res) => {
     }
 });
 
-// --- ✨ MODIFIED GET /api/investments Route ---
 app.get('/api/investments', authenticate, async (req, res, next) => {
     try {
         const dbInvestments = await Investment.find({ userId: req.user._id }).sort({ startDate: -1 });
@@ -481,7 +556,6 @@ app.get('/api/investments', authenticate, async (req, res, next) => {
     }
 });
 
-// --- ✨ MODIFIED POST /api/investments Route ---
 app.post('/api/investments', authenticate, [
     body('planId').trim().notEmpty().withMessage('Plan ID is required.').escape(),
     body('amount').isFloat({gt:0}).withMessage('Investment amount must be a positive number.').toFloat()
@@ -534,7 +608,6 @@ app.post('/api/investments', authenticate, [
     }
 });
 
-// --- ✨ MODIFIED /api/investments/:investmentId/withdraw Route ---
 app.post('/api/investments/:investmentId/withdraw', authenticate, [
     param('investmentId').isMongoId().withMessage('Invalid investment ID.'),
     body('withdrawalPin').isNumeric().isLength({min:5,max:5}).withMessage('Withdrawal PIN must be 5 digits.')
@@ -552,7 +625,6 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
         if(!user) {
             return res.status(401).json({success:false, message:'User authentication issue.'});
         }
-        // MODIFICATION: Check against the hardcoded global PIN
         if (withdrawalPin !== GLOBAL_WITHDRAWAL_PIN) { 
             return res.status(401).json({success:false, message:'Incorrect withdrawal PIN. Please try again or contact admin if you forgot the PIN.'});
         }
@@ -606,7 +678,6 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
     }
 });
 
-// --- ✨ NEW: GET User Transactions Route ---
 app.get('/api/transactions', authenticate, async (req, res, next) => {
     try {
         const transactions = await Transaction.find({ userId: req.user._id })
@@ -620,6 +691,7 @@ app.get('/api/transactions', authenticate, async (req, res, next) => {
 });
 
 // --- ADMIN ROUTES ---
+// ... (Admin routes are unchanged and correct) ...
 app.get('/api/admin/pending-users', adminAuthenticate, async (req, res, next) => {
     try {
         const pendingUsers = await User.find({ verified: true, adminApproved: false })
@@ -724,7 +796,6 @@ app.post('/api/admin/resend-verification/:userId', adminAuthenticate, [
         res.status(200).json({ success: true, message: 'Verification email has been resent to the user.' });
     } catch (e) { console.error("Error in /api/admin/resend-verification: ", e); next(e); }
 });
-
 
 // --- Catch-all & Error Handling ---
 app.all('/api/*', (req, res) => {

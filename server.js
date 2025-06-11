@@ -1,4 +1,4 @@
-// --- server.js (TRULY FULL - Based on "server copy 2.js" with Targeted Modifications) ---
+// --- server.js (FINAL ATTEMPT - Based on "server copy 2.js" with MINIMAL Targeted Modifications) ---
 require('dotenv').config();
 
 // ---- DOTENV DEBUG LOGS ----
@@ -82,6 +82,7 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions)); 
+
 
 // --- MongoDB Connection ---
 mongoose.connect(MONGO_URI)

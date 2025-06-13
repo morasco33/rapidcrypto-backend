@@ -1,4 +1,4 @@
-// --- server.js (FINAL ATTEMPT - Based on "server copy 2.js" with MINIMAL Targeted Modifications) ---
+// --- server.js (MODIFIED to handle admin crypto credits) ---
 require('dotenv').config();
 
 // ---- DOTENV DEBUG LOGS ----
@@ -287,6 +287,7 @@ function getPlanDurationsInMs(plan) {
 }
 
 // --- API Routes (User-facing) ---
+// ... (register, verify-email, resend-verification-email, login, profile, deposit, withdraw, etc. are unchanged)
 app.post('/api/register', authActionLimiter, [
     body('username').trim().isLength({min:3,max:30}).withMessage('Username must be 3-30 characters.').escape(),
     body('email').isEmail().withMessage('Invalid email address.').normalizeEmail(),
@@ -682,7 +683,7 @@ app.get('/api/transactions', authenticate, async (req, res, next) => {
     try {
         const transactions = await Transaction.find({ userId: req.user._id })
             .sort({ timestamp: -1 }) 
-            .limit(50); 
+            .limit(200); 
         res.status(200).json({ success: true, transactions: transactions });
     } catch (e) {
         console.error(`ERROR [GET /api/transactions] User: ${req.user?._id} - `, e);
@@ -734,24 +735,38 @@ app.get('/api/admin/user-by-email', adminAuthenticate, [
     } catch (e) { console.error("Error in /api/admin/user-by-email: ", e); next(e); }
 });
 
+
+// ========================== MODIFIED ADMIN UPDATE ROUTE START ==========================
 app.post('/api/admin/update-user/:userId', adminAuthenticate, [
     param('userId').isMongoId().withMessage('Invalid user ID.'),
     body('balance').optional().isFloat({ min: 0 }).withMessage('Balance must be a non-negative number.').toFloat(),
     body('username').optional().trim().isLength({min:3, max:30}).withMessage('Username must be 3-30 characters long.').escape(),
     body('isAdmin').optional().isBoolean().withMessage('isAdmin must be a boolean (true or false).').toBoolean(),
     body('verified').optional().isBoolean().withMessage('verified must be a boolean.').toBoolean(),
-    body('adminApproved').optional().isBoolean().withMessage('adminApproved must be a boolean.').toBoolean()
+    body('adminApproved').optional().isBoolean().withMessage('adminApproved must be a boolean.').toBoolean(),
+    // --- NEW VALIDATIONS for the assetCredits object from admin.html ---
+    body('assetCredits').optional().isObject().withMessage('Asset credits must be an object.'),
+    body('assetCredits.*').optional().isFloat({ min: 0 }).withMessage('Asset credit amount must be a non-negative number.').toFloat()
 ], async (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array({onlyFirstError:true}) });
+    
+    // Using a session to ensure all database writes succeed or fail together (atomicity)
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
     try {
-        const userToUpdate = await User.findById(req.params.userId).select('+password');
-        if (!userToUpdate) return res.status(404).json({ success: false, message: 'User not found.' });
+        const userToUpdate = await User.findById(req.params.userId).select('+password').session(session);
+        if (!userToUpdate) {
+            await session.abortTransaction();
+            return res.status(404).json({ success: false, message: 'User not found.' });
+        }
 
         const updatedFields = {};
         const allowedUpdates = ['balance', 'username', 'isAdmin', 'verified', 'adminApproved'];
         let changesMade = false;
 
+        // --- Handle standard field updates ---
         allowedUpdates.forEach(field => {
             if (req.body[field] !== undefined && req.body[field] !== userToUpdate[field]) {
                 userToUpdate[field] = req.body[field];
@@ -760,12 +775,61 @@ app.post('/api/admin/update-user/:userId', adminAuthenticate, [
             }
         });
 
+        // --- NEW LOGIC TO HANDLE ASSET CREDITS ---
+        const { assetCredits } = req.body;
+        const newTransactions = [];
+
+        if (assetCredits && Object.keys(assetCredits).length > 0) {
+            changesMade = true; // Mark that a change is being made
+            updatedFields.assetCredits = {};
+
+            for (const symbol in assetCredits) {
+                const amountToAdd = assetCredits[symbol];
+                if (amountToAdd > 0) {
+                    const normalizedSymbol = symbol.toUpperCase();
+                    updatedFields.assetCredits[normalizedSymbol] = amountToAdd;
+                    const assetIndex = userToUpdate.assets.findIndex(a => a.symbol === normalizedSymbol);
+
+                    if (assetIndex > -1) {
+                        // Asset exists, so just add to the amount
+                        userToUpdate.assets[assetIndex].amount += amountToAdd;
+                    } else {
+                        // Asset does not exist for the user, so add it to the array
+                        userToUpdate.assets.push({
+                            name: normalizedSymbol,
+                            symbol: normalizedSymbol,
+                            amount: amountToAdd
+                        });
+                    }
+
+                    // Create a transaction log for this admin action
+                    const adminCreditTrx = new Transaction({
+                        userId: userToUpdate._id,
+                        type: 'admin_credit',
+                        amount: amountToAdd,
+                        currency: normalizedSymbol,
+                        description: `Admin credit of ${amountToAdd} ${normalizedSymbol} by ${req.user.email}.`,
+                        status: 'completed'
+                    });
+                    newTransactions.push(adminCreditTrx);
+                }
+            }
+        }
+        
         if (!changesMade) {
+            await session.abortTransaction();
             return res.status(400).json({ success: false, message: 'No changes provided or new values match current values.' });
         }
         
-        await userToUpdate.save({ validateBeforeSave: true });
-        console.log(`ADMIN ACTION: User ${req.user.email} updated user ${userToUpdate.email}. Changes: ${JSON.stringify(updatedFields)}`);
+        // Save the user and any new transaction logs
+        await userToUpdate.save({ session });
+        if (newTransactions.length > 0) {
+            await Transaction.insertMany(newTransactions, { session });
+        }
+
+        await session.commitTransaction(); // Finalize the changes
+        
+        console.log(`ADMIN ACTION: Admin ${req.user.email} updated user ${userToUpdate.email}. Changes: ${JSON.stringify(updatedFields)}`);
         
         const returnUser = userToUpdate.toObject(); 
         delete returnUser.password; 
@@ -773,8 +837,17 @@ app.post('/api/admin/update-user/:userId', adminAuthenticate, [
         delete returnUser.resetToken;
         
         res.status(200).json({ success: true, message: 'User details updated successfully.', user: returnUser });
-    } catch (e) { console.error("Error in /api/admin/update-user: ", e); next(e); }
+
+    } catch (e) { 
+        await session.abortTransaction(); // Rollback on error
+        console.error("Error in /api/admin/update-user: ", e); 
+        next(e); 
+    } finally {
+        session.endSession(); // Always end the session
+    }
 });
+// =========================== MODIFIED ADMIN UPDATE ROUTE END ===========================
+
 
 app.post('/api/admin/resend-verification/:userId', adminAuthenticate, [
     param('userId').isMongoId().withMessage('Invalid user ID.')

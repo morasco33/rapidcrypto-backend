@@ -404,53 +404,70 @@ app.post('/api/login', authActionLimiter, [
     }
 });
 
-app.get('/api/profile', authenticate, (req, res) => {
-    res.status(200).json({success:true,user:req.user});
-});
+// ... keep all other code in server.js the same ...
 
-app.post('/api/deposit', authenticate, [
-    body('amount').isFloat({ gt: 0 }).withMessage('Deposit amount must be a positive number.').toFloat()
-], async (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({success:false,message:errors.array({onlyFirstError:true})[0].msg});
-    
-    const session = await mongoose.startSession();
-    session.startTransaction();
+// --- Authentication Middleware ---
+// ... (no changes here) ...
+
+// --- HELPER for On-the-Fly Interest Calculation ---
+// ... (no changes here) ...
+
+// --- API Routes (User-facing) ---
+// ... (no changes in /register, /login, etc.) ...
+
+// THIS IS THE ROUTE TO CHANGE
+app.get('/api/profile', authenticate, async (req, res, next) => {
     try {
-        const { amount } = req.body;
-        const user = await User.findById(req.user._id).session(session);
-        if (!user) {
-            throw new Error('User not found.');
+        // req.user is the authenticated user document from the middleware
+        const user = req.user.toObject(); // Use .toObject() for a plain JS object
+
+        let totalPortfolioValue = user.balance; // Start with the base USD balance
+        let cryptoPrices = {};
+
+        // Fetch live crypto prices from an external API (CoinGecko is free and easy)
+        try {
+            const priceApiUrl = 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,tether&vs_currencies=usd';
+            const priceResponse = await fetch(priceApiUrl);
+            if (!priceResponse.ok) throw new Error('CoinGecko API request failed');
+            
+            const priceData = await priceResponse.json();
+            cryptoPrices = {
+                BTC: priceData.bitcoin?.usd || 0,
+                ETH: priceData.ethereum?.usd || 0,
+                USDT: priceData.tether?.usd || 1, // Default USDT to $1 as a reliable fallback
+            };
+            console.log("Fetched crypto prices:", cryptoPrices);
+        } catch (priceError) {
+            console.warn(`[WARNING] Could not fetch live crypto prices: ${priceError.message}. Portfolio value may be incomplete.`);
+            // If the price API fails, we'll proceed without crypto values to avoid crashing.
+            cryptoPrices = { BTC: 0, ETH: 0, USDT: 1 };
         }
 
-        user.balance += amount;
+        // Calculate the USD value of the user's crypto assets and add to the total
+        if (user.assets && user.assets.length > 0) {
+            user.assets.forEach(asset => {
+                const price = cryptoPrices[asset.symbol.toUpperCase()];
+                if (price) {
+                    totalPortfolioValue += asset.amount * price;
+                }
+            });
+        }
+        
+        // Prepare a new response payload for clarity
+        const responsePayload = {
+            ...user, // Include all original user info (username, email, assets, etc.)
+            mainUSDBalance: user.balance, // The pure USD balance available for investing
+            totalPortfolioValueUSD: totalPortfolioValue, // The new, all-inclusive total value
+        };
 
-        const depositTransaction = new Transaction({
-            userId: user._id,
-            type: 'deposit_main_balance',
-            amount: amount,
-            description: `Simulated deposit of $${amount.toFixed(2)} to main balance.`,
-            status: 'completed',
-            meta: { ip: req.ip }
-        });
+        res.status(200).json({ success: true, profileData: responsePayload });
 
-        await user.save({ session });
-        await depositTransaction.save({ session });
-        await session.commitTransaction();
-
-        res.status(200).json({
-            success: true,
-            message: `Successfully deposited $${amount.toFixed(2)}. Your new balance is $${user.balance.toFixed(2)}.`,
-            newBalance: user.balance
-        });
     } catch (e) {
-        await session.abortTransaction();
-        next(e);
-    } finally {
-        session.endSession();
+        next(e); // Pass errors to the global error handler
     }
 });
 
+// ... rest of the file remains the same ...
 app.post('/api/withdraw', authenticate, [
     body('amount').isFloat({ gt: 0 }).withMessage('Withdrawal amount must be a positive number.').toFloat(),
     body('withdrawalPin').isNumeric().isLength({min:5,max:5}).withMessage('Withdrawal PIN must be 5 digits.')

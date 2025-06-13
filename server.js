@@ -245,14 +245,10 @@ const adminAuthenticate = async (req, res, next) => {
     });
 };
 
-// --- Rate Limiters (Increased for Testing) ---
-const TEMP_MAX_GENERAL = 5000; 
-const TEMP_MAX_AUTH = 500;    
-console.log(`RATE LIMITER CONFIG: General Max = ${TEMP_MAX_GENERAL}, Auth Max = ${TEMP_MAX_AUTH} (High for testing)`);
-
+// --- Rate Limiters ---
 const generalApiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
-    max: TEMP_MAX_GENERAL,
+    max: 5000,
     standardHeaders: 'draft-7', 
     legacyHeaders: false, 
     message: { success: false, message: 'Too many requests. Please try again after 15 minutes.' }
@@ -261,12 +257,12 @@ app.use('/api', generalApiLimiter);
 
 const authActionLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, 
-    max: TEMP_MAX_AUTH, 
+    max: 500, 
     message: { success: false, message: 'Too many authentication attempts. Please try again after an hour.' },
     skipSuccessfulRequests: true 
 });
 
-// --- Investment Plan Definitions (Now all 24 hours) ---
+// --- Investment Plan Definitions ---
 const INVESTMENT_PLANS = {
     "silver":   { id: "silver",   name: "Silver Plan",   minAmount: 1500,  maxAmount: 10000,  profitRatePercent: 2,  interestPeriodHours: 24, maturityPeriodDays: 14, withdrawalLockDays: 14 },
     "gold":     { id: "gold",     name: "Gold Plan",     minAmount: 2500,  maxAmount: 25000,  profitRatePercent: 5,  interestPeriodHours: 24, maturityPeriodDays: 14, withdrawalLockDays: 14 },
@@ -287,7 +283,6 @@ function getPlanDurationsInMs(plan) {
 }
 
 // --- API Routes (User-facing) ---
-// ... (register, verify-email, resend-verification-email, login, profile, deposit, withdraw, etc. are unchanged)
 app.post('/api/register', authActionLimiter, [
     body('username').trim().isLength({min:3,max:30}).withMessage('Username must be 3-30 characters.').escape(),
     body('email').isEmail().withMessage('Invalid email address.').normalizeEmail(),
@@ -376,45 +371,30 @@ app.post('/api/login', authActionLimiter, [
     body('email').isEmail().withMessage('Valid email required.').normalizeEmail(),
     body('password').notEmpty().withMessage('Password is required.')
 ], async (req, res, next) => { 
-    console.log(`LOGIN ROUTE: Attempting login for email: ${req.body.email}, IP: ${req.ip}`);
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-        console.log("LOGIN ROUTE: Validation errors.", errors.array());
-        return res.status(400).json({success:false,message:errors.array({onlyFirstError:true})[0].msg});
-    }
     try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({success:false,message:errors.array({onlyFirstError:true})[0].msg});
+        }
         const {email,password}=req.body;
-        console.log("LOGIN ROUTE: Finding user...");
         const user=await User.findOne({email:email.toLowerCase()}).select('+password'); 
         
-        if(!user) {
-            console.log(`LOGIN ROUTE: User not found for email: ${email.toLowerCase()}`);
-            return res.status(401).json({success:false,message:'Invalid email or password.'});
-        }
-        console.log("LOGIN ROUTE: User found, comparing password...");
-        const isMatch = await user.comparePassword(password);
-        if(!isMatch) {
-            console.log(`LOGIN ROUTE: Password mismatch for email: ${email.toLowerCase()}`);
+        if(!user || !(await user.comparePassword(password))) {
             return res.status(401).json({success:false,message:'Invalid email or password.'});
         }
 
-        console.log("LOGIN ROUTE: Password matched. Checking verification and approval...");
         if(!user.verified) {
-            console.log(`LOGIN ROUTE: Email not verified for: ${email.toLowerCase()}`);
             return res.status(403).json({success:false,message:'Email not verified. Please check your inbox for a verification link.', needsVerification:true, email: user.email});
         }
         if (!user.isAdmin && !user.adminApproved) { 
-            console.log(`LOGIN ROUTE: Account not admin approved for: ${email.toLowerCase()}`);
             return res.status(403).json({ success: false, message: 'Your account is verified but pending admin approval. Please wait or contact support.' });
         }
         
-        console.log("LOGIN ROUTE: Generating token...");
         const token=jwt.sign({id:user._id, isAdmin: user.isAdmin }, JWT_SECRET, {expiresIn:'24h'}); 
         const userResponse={
             _id:user._id, username:user.username, email:user.email, walletAddress:user.walletAddress,
             balance:user.balance, verified:user.verified, adminApproved: user.adminApproved, isAdmin: user.isAdmin, assets:user.assets
         };
-        console.log(`LOGIN ROUTE: Login successful for ${email.toLowerCase()}. Sending response.`);
         res.status(200).json({success:true,token,user:userResponse,message:'Login successful!'});
     } catch(e){ 
         console.error(`LOGIN ROUTE: Error during login for ${req.body.email}: `, e); 
@@ -438,8 +418,7 @@ app.post('/api/deposit', authenticate, [
         const { amount } = req.body;
         const user = await User.findById(req.user._id).session(session);
         if (!user) {
-            await session.abortTransaction();
-            return res.status(404).json({success:false, message: 'User not found.'});
+            throw new Error('User not found.');
         }
 
         user.balance += amount;
@@ -464,8 +443,7 @@ app.post('/api/deposit', authenticate, [
         });
     } catch (e) {
         await session.abortTransaction();
-        console.error(`ERROR [POST /api/deposit] User: ${req.user?.email} - `, e);
-        next(new Error("Deposit failed due to a server error."));
+        next(e);
     } finally {
         session.endSession();
     }
@@ -484,19 +462,16 @@ app.post('/api/withdraw', authenticate, [
         const { amount, withdrawalPin } = req.body;
 
         if (withdrawalPin !== GLOBAL_WITHDRAWAL_PIN) {
-            await session.abortTransaction();
-            return res.status(401).json({success:false, message:'Incorrect withdrawal PIN.'});
+            throw new Error('Incorrect withdrawal PIN.');
         }
 
         const user = await User.findById(req.user._id).session(session);
         if (!user) {
-            await session.abortTransaction();
-            return res.status(404).json({success:false, message: 'User not found.'});
+            throw new Error('User not found.');
         }
 
         if (user.balance < amount) {
-            await session.abortTransaction();
-            return res.status(400).json({success:false, message: 'Insufficient balance.'});
+            throw new Error('Insufficient balance.');
         }
 
         user.balance -= amount;
@@ -506,8 +481,7 @@ app.post('/api/withdraw', authenticate, [
             type: 'withdrawal_main_balance',
             amount: -amount,
             description: `Withdrawal of $${amount.toFixed(2)} from main balance.`,
-            status: 'completed',
-            meta: { ip: req.ip }
+            status: 'completed'
         });
 
         await user.save({ session });
@@ -521,8 +495,7 @@ app.post('/api/withdraw', authenticate, [
         });
     } catch (e) {
         await session.abortTransaction();
-        console.error(`ERROR [POST /api/withdraw] User: ${req.user?.email} - `, e);
-        next(new Error("Withdrawal failed due to a server error."));
+        next(e);
     } finally {
         session.endSession();
     }
@@ -534,12 +507,7 @@ app.get('/api/investment-plans', authenticate, (req, res) => {
         profitRatePercent: p.profitRatePercent, interestPeriodHours: p.interestPeriodHours,
         maturityPeriodDays: p.maturityPeriodDays, withdrawalLockDays: p.withdrawalLockDays
     }));
-    if(frontendPlans?.length) {
-        res.status(200).json({success:true,plans:frontendPlans});
-    } else {
-        console.error("ERROR [server.js]: No investment plans defined for /api/investment-plans.");
-        res.status(500).json({success:false,message:"Investment plans are currently unavailable."});
-    }
+    res.status(200).json({success:true,plans:frontendPlans});
 });
 
 app.get('/api/investments', authenticate, async (req, res, next) => {
@@ -552,7 +520,6 @@ app.get('/api/investments', authenticate, async (req, res, next) => {
         });
         res.status(200).json({ success: true, investments: calculatedInvestments });
     } catch (e) {
-        console.error(`ERROR [GET /api/investments] User: ${req.user?._id} - `, e);
         next(e);
     }
 });
@@ -569,28 +536,27 @@ app.post('/api/investments', authenticate, [
         const {planId,amount}=req.body;
         const userId=req.user._id;
         const plan = INVESTMENT_PLANS[planId];
-        if(!plan) return res.status(400).json({success:false, message: 'Invalid investment plan selected.'});
+        if(!plan) throw new Error('Invalid investment plan selected.');
         if(amount < plan.minAmount || amount > plan.maxAmount) {
-            return res.status(400).json({success:false, message: `Amount for ${plan.name} must be between $${plan.minAmount} and $${plan.maxAmount}.`});
+            throw new Error(`Amount for ${plan.name} must be between $${plan.minAmount} and $${plan.maxAmount}.`);
         }
         const user = await User.findById(userId).session(session);
-        if(!user) return res.status(404).json({success:false, message:'User not found.'}); 
-        if(user.balance < amount) return res.status(400).json({success:false, message: 'Insufficient account balance.'});
+        if(!user) throw new Error('User not found.'); 
+        if(user.balance < amount) throw new Error('Insufficient account balance.');
         user.balance -= amount;
         const now = new Date(); 
         const durations = getPlanDurationsInMs(plan);
         const newInvestment = new Investment({
             userId, planId: plan.id, planName: plan.name, initialAmount: amount, currentValue: amount,
             profitRate: plan.profitRatePercent, interestPeriodMs: durations.interestPeriodMs,
-            lastInterestAccrualTime: now, startDate: now,
+            startDate: now,
             maturityDate: new Date(now.getTime() + durations.maturityPeriodMs),
             withdrawalUnlockTime: new Date(now.getTime() + durations.withdrawalLockPeriodMs),
-            status: 'active'
         });
         const investmentTransaction = new Transaction({
             userId, type: 'plan_investment', amount: -amount, 
             description: `Invested $${amount.toFixed(2)} in ${plan.name}.`,
-            relatedInvestmentId: newInvestment._id, meta: { ip: req.ip }
+            relatedInvestmentId: newInvestment._id
         });
         await user.save({session});
         await newInvestment.save({session});
@@ -602,8 +568,7 @@ app.post('/api/investments', authenticate, [
         });
     } catch(e){
         await session.abortTransaction();
-        console.error(`ERROR [POST /api/investments] User: ${req.user?.email} - `,e);
-        next(new Error("Investment failed due to an unexpected error. Please try again."));
+        next(e);
     } finally{
         session.endSession();
     }
@@ -622,45 +587,26 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
         const {withdrawalPin}=req.body;
         const userId=req.user._id;
         const currentTime = new Date(); 
-        const user = await User.findById(userId).select('+balance').session(session); 
-        if(!user) {
-            return res.status(401).json({success:false, message:'User authentication issue.'});
-        }
-        if (withdrawalPin !== GLOBAL_WITHDRAWAL_PIN) { 
-            return res.status(401).json({success:false, message:'Incorrect withdrawal PIN. Please try again or contact admin if you forgot the PIN.'});
-        }
+        const user = await User.findById(userId).session(session); 
+        if(!user) throw new Error('User authentication issue.');
+        if (withdrawalPin !== GLOBAL_WITHDRAWAL_PIN) throw new Error('Incorrect withdrawal PIN.');
         const investment = await Investment.findOne({_id: investmentId, userId: userId}).session(session);
-        if(!investment) return res.status(404).json({success:false, message: 'Investment not found or does not belong to you.'});
+        if(!investment) throw new Error('Investment not found or does not belong to you.');
         if(currentTime < new Date(investment.withdrawalUnlockTime)) {
-            return res.status(403).json({success:false, message:`Withdrawal is locked until ${new Date(investment.withdrawalUnlockTime).toLocaleString()}.`});
-        }
-        const { calculatedValue, newCalculatedLastAccrualTime } = calculateLiveInvestmentValue(investment, currentTime);
-        const finalInterestAccrued = calculatedValue - investment.currentValue; 
-        investment.currentValue = calculatedValue; 
-        investment.lastInterestAccrualTime = newCalculatedLastAccrualTime;
-        if(investment.status === 'active' && currentTime >= new Date(investment.maturityDate)) {
-            investment.status = 'matured';
+            throw new Error(`Withdrawal is locked until ${new Date(investment.withdrawalUnlockTime).toLocaleString()}.`);
         }
         if(!['active','matured'].includes(investment.status)) {
-            return res.status(400).json({success:false, message:`Investment is not in a withdrawable state (current status: ${investment.status}).`});
+            throw new Error(`Investment is not in a withdrawable state (current status: ${investment.status}).`);
         }
-        let amountToReturn = investment.currentValue; 
+        const { calculatedValue } = calculateLiveInvestmentValue(investment, currentTime);
+        let amountToReturn = calculatedValue; 
         user.balance += amountToReturn;
-        if (finalInterestAccrued > 0.005) { 
-            const interestTrx = new Transaction({
-                userId, type: 'interest_accrued_to_plan_value',
-                amount: parseFloat(finalInterestAccrued.toFixed(2)),
-                description: `Final interest for ${investment.planName} (ID: ${investment._id}) on withdrawal.`,
-                relatedInvestmentId: investment._id, status: 'completed', meta: { ip: req.ip }
-            });
-            await interestTrx.save({session});
-        }
         const withdrawalTransaction = new Transaction({
-            userId, type: 'plan_withdrawal_return', amount: +amountToReturn,
-            description: `Withdrew $${amountToReturn.toFixed(2)} from ${investment.planName} (ID: ${investment._id}).`,
-            relatedInvestmentId: investment._id, meta: { ip: req.ip }
+            userId, type: 'plan_withdrawal_return', amount: amountToReturn,
+            description: `Withdrew $${amountToReturn.toFixed(2)} from ${investment.planName}.`,
+            relatedInvestmentId: investment._id
         });
-        investment.status = (investment.status === 'matured' || currentTime >= new Date(investment.maturityDate)) ? 'withdrawn_matured' : 'withdrawn_early';
+        investment.status = 'withdrawn_matured';
         investment.currentValue = 0; 
         await user.save({session});
         await investment.save({session}); 
@@ -668,12 +614,11 @@ app.post('/api/investments/:investmentId/withdraw', authenticate, [
         await session.commitTransaction();
         res.status(200).json({
             success:true, message:`Successfully withdrew $${amountToReturn.toFixed(2)} from investment.`,
-            newBalance:user.balance, withdrawnInvestment:investment.toObject() 
+            newBalance:user.balance
         });
     } catch(e){
         await session.abortTransaction();
-        console.error(`ERROR [POST /api/investments/:id/withdraw] User: ${req.user?.email} - `,e);
-        next(new Error(e.message || "Withdrawal failed due to an unexpected error."));
+        next(e);
     } finally{
         session.endSession();
     }
@@ -686,7 +631,6 @@ app.get('/api/transactions', authenticate, async (req, res, next) => {
             .limit(200); 
         res.status(200).json({ success: true, transactions: transactions });
     } catch (e) {
-        console.error(`ERROR [GET /api/transactions] User: ${req.user?._id} - `, e);
         next(e);
     }
 });
@@ -697,46 +641,33 @@ app.get('/api/admin/pending-users', adminAuthenticate, async (req, res, next) =>
         const pendingUsers = await User.find({ verified: true, adminApproved: false })
             .select('username email _id adminApproved verified createdAt');
         res.status(200).json({ success: true, users: pendingUsers });
-    } catch (e) { console.error("Error in /api/admin/pending-users: ", e); next(e); }
+    } catch (e) { next(e); }
 });
 
 app.post('/api/admin/approve-user/:userId', adminAuthenticate, [
-    param('userId').isMongoId().withMessage('Invalid user ID.')
+    param('userId').isMongoId()
 ], async (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array({onlyFirstError:true})[0].msg });
     try {
         const userToApprove = await User.findById(req.params.userId);
         if (!userToApprove) return res.status(404).json({ success: false, message: 'User not found.' });
-        if (!userToApprove.verified) return res.status(400).json({ success: false, message: 'User must verify their email before admin approval.' });
-        if (userToApprove.adminApproved) return res.status(400).json({ success: false, message: 'User is already approved.' });
-        
         userToApprove.adminApproved = true;
         await userToApprove.save({ validateBeforeSave: false });
-        
-        await sendEmail({
-            to: userToApprove.email, subject: `Your ${APP_NAME} Account has been Approved!`,
-            html: `<p>Hi ${userToApprove.username},</p><p>Good news! Your account on ${APP_NAME} has been approved by an administrator. You can now log in and access all platform features.</p><p>Login here: <a href="${FRONTEND_URL_FOR_EMAILS}/login.html">${FRONTEND_URL_FOR_EMAILS}/login.html</a></p><p>Thank you for joining ${APP_NAME}!</p>`});
-        
         res.status(200).json({ success: true, message: `User ${userToApprove.username} approved successfully.` });
-    } catch (e) { console.error("Error in /api/admin/approve-user: ", e); next(e); }
+    } catch (e) { next(e); }
 });
 
 app.get('/api/admin/user-by-email', adminAuthenticate, [
-    query('email').isEmail().withMessage('A valid email address is required.').normalizeEmail()
+    query('email').isEmail().normalizeEmail()
 ], async (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array({onlyFirstError:true})[0].msg });
     try {
         const user = await User.findOne({ email: req.query.email.toLowerCase() })
-            .select('-password -emailVerificationToken -emailVerificationTokenExpiry -loginOtp -loginOtpExpiry -resetToken -resetTokenExpiry -withdrawalPinHash -__v');
-        if (!user) return res.status(404).json({ success: false, message: 'User not found with that email address.' });
+            .select('-password -emailVerificationToken -emailVerificationTokenExpiry');
+        if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
         res.status(200).json({ success: true, user });
-    } catch (e) { console.error("Error in /api/admin/user-by-email: ", e); next(e); }
+    } catch (e) { next(e); }
 });
 
-
-// ========================== MODIFIED ADMIN UPDATE ROUTE START ==========================
+// ========================== CORRECTED AND FINAL ADMIN UPDATE ROUTE ==========================
 app.post('/api/admin/update-user/:userId', adminAuthenticate, [
     param('userId').isMongoId().withMessage('Invalid user ID.'),
     body('balance').optional().isFloat({ min: 0 }).withMessage('Balance must be a non-negative number.').toFloat(),
@@ -744,19 +675,17 @@ app.post('/api/admin/update-user/:userId', adminAuthenticate, [
     body('isAdmin').optional().isBoolean().withMessage('isAdmin must be a boolean (true or false).').toBoolean(),
     body('verified').optional().isBoolean().withMessage('verified must be a boolean.').toBoolean(),
     body('adminApproved').optional().isBoolean().withMessage('adminApproved must be a boolean.').toBoolean(),
-    // --- NEW VALIDATIONS for the assetCredits object from admin.html ---
     body('assetCredits').optional().isObject().withMessage('Asset credits must be an object.'),
     body('assetCredits.*').optional().isFloat({ min: 0 }).withMessage('Asset credit amount must be a non-negative number.').toFloat()
 ], async (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array({onlyFirstError:true}) });
     
-    // Using a session to ensure all database writes succeed or fail together (atomicity)
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-        const userToUpdate = await User.findById(req.params.userId).select('+password').session(session);
+        const userToUpdate = await User.findById(req.params.userId).session(session);
         if (!userToUpdate) {
             await session.abortTransaction();
             return res.status(404).json({ success: false, message: 'User not found.' });
@@ -766,21 +695,19 @@ app.post('/api/admin/update-user/:userId', adminAuthenticate, [
         const allowedUpdates = ['balance', 'username', 'isAdmin', 'verified', 'adminApproved'];
         let changesMade = false;
 
-        // --- Handle standard field updates ---
         allowedUpdates.forEach(field => {
-            if (req.body[field] !== undefined && req.body[field] !== userToUpdate[field]) {
+            if (req.body[field] !== undefined && userToUpdate[field] !== req.body[field]) {
                 userToUpdate[field] = req.body[field];
                 updatedFields[field] = req.body[field];
                 changesMade = true;
             }
         });
 
-        // --- NEW LOGIC TO HANDLE ASSET CREDITS ---
         const { assetCredits } = req.body;
         const newTransactions = [];
 
         if (assetCredits && Object.keys(assetCredits).length > 0) {
-            changesMade = true; // Mark that a change is being made
+            changesMade = true;
             updatedFields.assetCredits = {};
 
             for (const symbol in assetCredits) {
@@ -791,25 +718,17 @@ app.post('/api/admin/update-user/:userId', adminAuthenticate, [
                     const assetIndex = userToUpdate.assets.findIndex(a => a.symbol === normalizedSymbol);
 
                     if (assetIndex > -1) {
-                        // Asset exists, so just add to the amount
                         userToUpdate.assets[assetIndex].amount += amountToAdd;
                     } else {
-                        // Asset does not exist for the user, so add it to the array
-                        userToUpdate.assets.push({
-                            name: normalizedSymbol,
-                            symbol: normalizedSymbol,
-                            amount: amountToAdd
-                        });
+                        userToUpdate.assets.push({ name: normalizedSymbol, symbol: normalizedSymbol, amount: amountToAdd });
                     }
 
-                    // Create a transaction log for this admin action
                     const adminCreditTrx = new Transaction({
                         userId: userToUpdate._id,
                         type: 'admin_credit',
                         amount: amountToAdd,
                         currency: normalizedSymbol,
                         description: `Admin credit of ${amountToAdd} ${normalizedSymbol} by ${req.user.email}.`,
-                        status: 'completed'
                     });
                     newTransactions.push(adminCreditTrx);
                 }
@@ -818,16 +737,15 @@ app.post('/api/admin/update-user/:userId', adminAuthenticate, [
         
         if (!changesMade) {
             await session.abortTransaction();
-            return res.status(400).json({ success: false, message: 'No changes provided or new values match current values.' });
+            return res.status(400).json({ success: false, message: 'No changes provided.' });
         }
         
-        // Save the user and any new transaction logs
         await userToUpdate.save({ session });
         if (newTransactions.length > 0) {
             await Transaction.insertMany(newTransactions, { session });
         }
 
-        await session.commitTransaction(); // Finalize the changes
+        await session.commitTransaction();
         
         console.log(`ADMIN ACTION: Admin ${req.user.email} updated user ${userToUpdate.email}. Changes: ${JSON.stringify(updatedFields)}`);
         
@@ -839,21 +757,18 @@ app.post('/api/admin/update-user/:userId', adminAuthenticate, [
         res.status(200).json({ success: true, message: 'User details updated successfully.', user: returnUser });
 
     } catch (e) { 
-        await session.abortTransaction(); // Rollback on error
+        await session.abortTransaction();
         console.error("Error in /api/admin/update-user: ", e); 
         next(e); 
     } finally {
-        session.endSession(); // Always end the session
+        session.endSession();
     }
 });
-// =========================== MODIFIED ADMIN UPDATE ROUTE END ===========================
-
+// ======================================================================================
 
 app.post('/api/admin/resend-verification/:userId', adminAuthenticate, [
-    param('userId').isMongoId().withMessage('Invalid user ID.')
+    param('userId').isMongoId()
 ], async (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array({onlyFirstError:true})[0].msg });
     try {
         const user = await User.findById(req.params.userId);
         if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
@@ -866,68 +781,30 @@ app.post('/api/admin/resend-verification/:userId', adminAuthenticate, [
             to: user.email, subject: `ACTION REQUIRED: Verify Your Email for ${APP_NAME} (Admin Resend)`,
             html: `<p>Hi ${user.username},</p><p>An administrator has requested to resend your email verification link for your account at ${APP_NAME}.</p><p>Please verify your email by clicking the link below:</p><p><a href="${verificationLink}">Verify Email Address</a></p><p>This link will expire in 24 hours.</p>`});
         res.status(200).json({ success: true, message: 'Verification email has been resent to the user.' });
-    } catch (e) { console.error("Error in /api/admin/resend-verification: ", e); next(e); }
+    } catch (e) { next(e); }
 });
 
 
 // --- Catch-all & Error Handling ---
 app.all('/api/*', (req, res) => {
-    console.warn(`WARN [Server]: 404 Not Found for API route: ${req.method} ${req.originalUrl} from IP: ${req.ip}`);
-    res.status(404).json({ success: false, message: `The API endpoint ${req.originalUrl} was not found on this server.` });
+    res.status(404).json({ success: false, message: `The API endpoint ${req.originalUrl} was not found.` });
 });
 
 app.use((err, req, res, next) => {
-    console.error("❌ GLOBAL ERROR HANDLER:", {
-        path: req.path, method: req.method, name: err.name, message: err.message,
-        isOperational: err.isOperational, stack: NODE_ENV !== 'production' ? err.stack : undefined
-    });
+    console.error("GLOBAL ERROR HANDLER:", err.message, err.stack);
     if (res.headersSent) { return next(err); }
-    let statusCode = err.statusCode || 500;
-    let message = err.isOperational ? err.message : 'An unexpected internal server error occurred.';
-    let errorType = err.name || 'ServerError';
-    if (err.name === 'ValidationError') { statusCode = 400; message = `Validation Failed: ${Object.values(err.errors).map(el => el.message).join('. ')}`; errorType = 'ValidationError';}
-    else if (err.name === 'CastError' && err.kind === 'ObjectId') { statusCode = 400; message = 'Invalid ID format provided.'; errorType = 'CastError';}
-    else if (err.name === 'MongoServerError' && err.code === 11000) { statusCode = 409; const field = Object.keys(err.keyValue)[0]; message = `An account with this ${field} already exists.`; errorType = 'DuplicateKeyError';}
-    else if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') { statusCode = 401; message = err.name === 'TokenExpiredError' ? 'Session has expired.' : 'Invalid session token.'; errorType = err.name;}
-    if (NODE_ENV === 'production' && statusCode === 500 && !err.isOperational) { message = 'An unexpected server error occurred. Please try again later.';}
-    res.status(statusCode).json({ success: false, message: message, errorType: errorType, ...(NODE_ENV !== 'production' && !err.isOperational && { errorDetails: err.message }) });
+    res.status(err.statusCode || 500).json({ 
+        success: false, 
+        message: err.message || 'An unexpected internal server error occurred.'
+    });
 });
 
-// --- Start Server & Graceful Shutdown ---
+// --- Start Server ---
 const serverInstance = app.listen(PORT, () => {
     console.log(`\n✅ Server running in ${NODE_ENV} mode on port ${PORT}`);
-    const mongoDisplayUri = MONGO_URI 
-        ? (MONGO_URI.includes('@') ? MONGO_URI.substring(0, MONGO_URI.indexOf('@')).split('/').pop() + '@...' : MONGO_URI.substring(0, 20) + '...')
-        : 'NOT SET';
-    console.log(`   MongoDB URI (host part): ${mongoDisplayUri}`);
-    console.log(`   Frontend URL for Emails: ${FRONTEND_URL_FOR_EMAILS}`);
-    console.log(`   Allowed CORS Origins: ${allowedOrigins.length > 0 ? allowedOrigins.join(', ') : 'None explicitly set (check logic)'}`);
-    if(NODE_ENV === 'development') console.log(`   Open in browser: http://localhost:${PORT}`);
 });
 
-const gracefulShutdown = (signal) => {
-    console.log(`\n${signal} received. Shutting down gracefully...`);
-    serverInstance.close(() => {
-        console.log('✅ HTTP server closed.');
-        mongoose.connection.close(false).then(() => {
-            console.log('✅ MongoDB connection closed.');
-            process.exit(0);
-        }).catch(err => {
-            console.error("❌ Error closing MongoDB connection during shutdown:", err);
-            process.exit(1);
-        });
-    });
-    setTimeout(() => {
-        console.error('❌ Graceful shutdown timed out. Forcing exit.');
-        process.exit(1);
-    }, 10000); 
-};
-['SIGINT', 'SIGTERM', 'SIGQUIT'].forEach(signal => process.on(signal, () => gracefulShutdown(signal)));
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ UNHANDLED REJECTION at:', promise, 'reason:', reason);
-});
-process.on('uncaughtException', (error, origin) => {
-    console.error('❌ UNCAUGHT EXCEPTION:', { error: { message: error.message, stack: error.stack }, origin });
-    gracefulShutdown('uncaughtException'); 
-    setTimeout(() => process.exit(1), 7000); 
+process.on('unhandledRejection', (err, promise) => {
+  console.error(`Unhandled Rejection: ${err.message}`);
+  serverInstance.close(() => process.exit(1));
 });

@@ -283,6 +283,8 @@ function getPlanDurationsInMs(plan) {
 }
 
 // --- API Routes (User-facing) ---
+// [ ... all your existing user-facing routes from /api/register to /api/transactions ... ]
+// --- START OF USER ROUTES (UNCHANGED) ---
 app.post('/api/register', authActionLimiter, [
     body('username').trim().isLength({min:3,max:30}).withMessage('Username must be 3-30 characters.').escape(),
     body('email').isEmail().withMessage('Invalid email address.').normalizeEmail(),
@@ -634,6 +636,7 @@ app.get('/api/transactions', authenticate, async (req, res, next) => {
         next(e);
     }
 });
+// --- END OF USER ROUTES (UNCHANGED) ---
 
 // --- ADMIN ROUTES ---
 app.get('/api/admin/pending-users', adminAuthenticate, async (req, res, next) => {
